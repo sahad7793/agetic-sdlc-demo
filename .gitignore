@@ -1,0 +1,29 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+
+# Test and coverage results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Local application data
+*.db
+*.db-shm
+*.db-wal
+
+# OS files
+.DS_Store
+Thumbs.db
