@@ -74,16 +74,78 @@ public class TaskServiceTests
         completed!.Status.Should().Be(TaskItemStatus.Done);
     }
 
+    [Fact]
+    public async Task GetOverdueAsync_IncludesOverdueNotDoneTasks()
+    {
+        var overdueTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "Overdue",
+            Status = TaskItemStatus.InProgress,
+            DueDate = DateTime.UtcNow.AddDays(-1),
+            CreatedAt = DateTime.UtcNow
+        };
+        var repository = new FakeTaskRepository { Tasks = [overdueTask] };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetOverdueAsync(CancellationToken.None);
+
+        result.Should().ContainSingle(task => task.Id == overdueTask.Id);
+    }
+
+    [Fact]
+    public async Task GetOverdueAsync_ExcludesDoneTasksEvenWhenOverdue()
+    {
+        var doneOverdueTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "Done",
+            Status = TaskItemStatus.Done,
+            DueDate = DateTime.UtcNow.AddDays(-1),
+            CreatedAt = DateTime.UtcNow
+        };
+        var repository = new FakeTaskRepository { Tasks = [doneOverdueTask] };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetOverdueAsync(CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOverdueAsync_ExcludesTasksThatAreNotYetDue()
+    {
+        var notYetDueTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "Future",
+            Status = TaskItemStatus.Todo,
+            DueDate = DateTime.UtcNow.AddDays(1),
+            CreatedAt = DateTime.UtcNow
+        };
+        var repository = new FakeTaskRepository { Tasks = [notYetDueTask] };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetOverdueAsync(CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
     private static TaskService CreateService() =>
         new(new FakeTaskRepository(), NullLogger<TaskService>.Instance);
 
     private sealed class FakeTaskRepository : ITaskRepository
     {
         public TaskItem? Task { get; set; }
+        public List<TaskItem> Tasks { get; set; } = [];
 
         public Task<IReadOnlyList<TaskItem>> GetAllAsync(TaskItemStatus? status, CancellationToken cancellationToken) =>
             System.Threading.Tasks.Task.FromResult<IReadOnlyList<TaskItem>>(
                 Task is null ? [] : [Task]);
+
+        public Task<IReadOnlyList<TaskItem>> GetWithDueDateBeforeAsync(DateTime dueBefore, CancellationToken cancellationToken) =>
+            System.Threading.Tasks.Task.FromResult<IReadOnlyList<TaskItem>>(
+                Tasks.Where(task => task.DueDate.HasValue && task.DueDate.Value < dueBefore).ToList());
 
         public Task<TaskItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
             System.Threading.Tasks.Task.FromResult(Task?.Id == id ? Task : null);

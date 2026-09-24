@@ -17,6 +17,13 @@ public class EfTaskRepository(TaskManagementDbContext database) : ITaskRepositor
         return await query.ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<TaskItem>> GetWithDueDateBeforeAsync(DateTime dueBefore, CancellationToken cancellationToken) =>
+        await database.Tasks
+            .AsNoTracking()
+            .Where(task => task.DueDate.HasValue && task.DueDate.Value < dueBefore)
+            .OrderByDescending(task => task.CreatedAt)
+            .ToListAsync(cancellationToken);
+
     public Task<TaskItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
         database.Tasks.SingleOrDefaultAsync(task => task.Id == id, cancellationToken);
 

@@ -12,6 +12,15 @@ public class TaskService(ITaskRepository repository, ILogger<TaskService> logger
         return tasks.Select(Map).ToList();
     }
 
+    public async Task<IReadOnlyList<TaskResponse>> GetOverdueAsync(CancellationToken cancellationToken)
+    {
+        var tasks = await repository.GetWithDueDateBeforeAsync(DateTime.UtcNow, cancellationToken);
+        return tasks
+            .Where(task => task.Status != TaskItemStatus.Done)
+            .Select(Map)
+            .ToList();
+    }
+
     public async Task<TaskResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         var task = await repository.GetByIdAsync(id, cancellationToken);
