@@ -36,6 +36,6 @@ Enable GitHub Copilot coding agent for the organization and this repository acco
 
 Open the approved issue, assign it to **Copilot**, or use **Open in Copilot**. Include the intended scope and acceptance criteria. Review the resulting plan and pull request like any other contributor change; the agent's work does not replace human review.
 
-## Future advisory workflows
+### 5. Workflow orchestration
 
-See [agentic-workflows-todo.md](agentic-workflows-todo.md) for safe, intentionally deferred `gh-aw` workflow goals. They are advisory only and must never self-approve, self-merge, or mutate issues without review.
+This repository runs two [GitHub Agentic Workflows](https://github.github.com/gh-aw/) (`gh-aw`), configured under `.github/workflows/`: an issue-triage workflow that comments on newly opened issues, and a weekly report workflow that opens a summary issue. Both are advisory only — they cannot self-approve, self-merge, or mutate issues without review. See [agentic-workflows.md](agentic-workflows.md) for what each workflow does and the `COPILOT_GITHUB_TOKEN` repository secret the owner must add before they can run.
