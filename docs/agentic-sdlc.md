@@ -19,15 +19,14 @@ Open **Settings > Code security and analysis** for this repository and enable De
 
 ### 2. Protect `main`
 
-Open **Settings > Branches**, choose **Add branch protection rule**, and target `main`. Enable:
+This repository uses a repository ruleset (**Settings > Rules > Rulesets**) named "Main Branch Protection" targeting `refs/heads/main`, enforcing:
 
-- Require a pull request before merging.
-- Require at least one approving review.
-- Dismiss stale approvals when new commits are pushed (recommended).
-- Require status checks to pass before merging, then select the CI workflow's **Build, test, and analyze** check after it has run at least once.
-- Require branches to be up to date before merging (recommended).
+- Require a pull request before merging, with at least one approving review.
+- Dismiss stale approvals when new commits are pushed.
+- Require the CI workflow's **Build, test, and analyze** status check to pass, using the up-to-date/strict policy.
+- Block force pushes and branch deletion.
 
-Do not grant bypass permissions to implementation agents. Repository owners should confirm this configuration manually because it controls production governance.
+**Bypass policy:** repository admins may bypass this ruleset (`bypass_actors: RepositoryRole "admin"`, mode `always`). This lets the solo repository owner merge their own changes (e.g. dependency policy fixes) without waiting on a second approver, since GitHub does not allow self-approval of your own pull request. Implementation agents and other collaborators are not granted bypass, so their pull requests always require a human's approving review and a green CI run before merge.
 
 ### 3. Enable GitHub Copilot coding agent
 
