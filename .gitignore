@@ -23,6 +23,8 @@ coverage/
 *.db
 *.db-shm
 *.db-wal
+.azure/*
+!.azure/deployment-plan.md
 
 # OS files
 .DS_Store

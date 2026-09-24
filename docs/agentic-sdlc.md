@@ -11,6 +11,23 @@ This repository uses agents to accelerate implementation and review, while peopl
 5. A human reviewer uses the PR template, code review, test results, and any advisory agent review to check architecture, validation, business rules, and regression coverage.
 6. After required CI checks are green and a human approval is present, a human merges the PR. Agents never approve or merge pull requests by themselves.
 
+## Delivery and deployment
+
+`main` deployments are handled by the **Deploy** workflow only after the **CI** workflow has completed successfully. It uses GitHub Actions OIDC to build the API once in Azure Container Registry (ACR), captures the immutable image digest, deploys that digest to `staging`, and verifies the `/health` endpoint. The `production` job then deploys the **same** digest; it is blocked by the GitHub Environment required-reviewer rule.
+
+| Environment | Azure location | Resource group | Deployment behavior |
+| --- | --- | --- | --- |
+| `staging` | Central US | `rg-taskmanagement-staging-centralus` | Automatic after CI |
+| `production` | West US 2 | `rg-taskmanagement-production-westus2` | Requires approval from `sahad7793` |
+
+The environments have independent Container Apps environments/apps, user-assigned managed identities, Entra-only Azure SQL logical servers, and databases. They share ACR in East US 2 so that production can only receive the staging-validated image digest. Each Container App identity has `AcrPull` on the registry and is granted SQL data-plane access (`db_datareader`, `db_datawriter`, and `db_ddladmin` for EF migrations) by `scripts/grant-sql-access.sh`. SQL password authentication is disabled; the API uses `Authentication=Active Directory Managed Identity` with the user-assigned identity.
+
+### Operator configuration
+
+The following GitHub Environment variables are required for both `staging` and `production`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, `AZURE_RESOURCE_GROUP`, `ACR_NAME`, `ACR_LOGIN_SERVER`, `CONTAINER_APP_NAME`, and `MANAGED_IDENTITY_ID`. The Entra application registrations have federated credentials constrained to `repo:sahad7793/agetic-sdlc-demo:environment:staging` and `repo:sahad7793/agetic-sdlc-demo:environment:production`; no client secret is used.
+
+The production approval gate is configured in **Settings > Environments > production**. Its required reviewer must remain enabled; do not deploy production directly with Azure CLI because that bypasses the approval audit trail.
+
 ## Getting started for the repository owner
 
 ### 1. Enable security features
