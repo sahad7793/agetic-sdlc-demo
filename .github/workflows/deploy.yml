@@ -1,0 +1,114 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-staging:
+    name: Build and deploy staging
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Check out validated source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and publish immutable image
+        id: image
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          az acr login --name "$ACR_NAME"
+          docker build --file src/TaskManagement.Api/Dockerfile --tag "$ACR_LOGIN_SERVER/taskmanagement-api:$IMAGE_TAG" src/TaskManagement.Api
+          docker push "$ACR_LOGIN_SERVER/taskmanagement-api:$IMAGE_TAG"
+          digest=$(az acr repository show --name "$ACR_NAME" --image "taskmanagement-api:$IMAGE_TAG" --query digest --output tsv)
+          echo "image=$ACR_LOGIN_SERVER/taskmanagement-api@$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy validated image to staging
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+          CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+          MANAGED_IDENTITY_ID: ${{ vars.MANAGED_IDENTITY_ID }}
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          az containerapp registry set \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --server "$ACR_LOGIN_SERVER" \
+            --identity "$MANAGED_IDENTITY_ID" \
+            --output none
+          az containerapp ingress update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --target-port 8080 \
+            --output none
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "$IMAGE" \
+            --output none
+          fqdn=$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" --query properties.configuration.ingress.fqdn --output tsv)
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error "https://$fqdn/health"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+  deploy-production:
+    name: Deploy production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy the staging-validated image
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+          CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+          MANAGED_IDENTITY_ID: ${{ vars.MANAGED_IDENTITY_ID }}
+          IMAGE: ${{ needs.deploy-staging.outputs.image }}
+        run: |
+          az containerapp registry set \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --server "$ACR_LOGIN_SERVER" \
+            --identity "$MANAGED_IDENTITY_ID" \
+            --output none
+          az containerapp ingress update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --target-port 8080 \
+            --output none
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "$IMAGE" \
+            --output none

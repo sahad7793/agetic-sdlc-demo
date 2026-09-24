@@ -11,6 +11,16 @@ namespace TaskManagement.Api.Tests;
 public class TasksEndpointTests(TaskApiFactory factory) : IClassFixture<TaskApiFactory>
 {
     [Fact]
+    public async Task Health_ReturnsHealthy()
+    {
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task CreateThenGetById_ReturnsPersistedTask()
     {
         var client = factory.CreateClient();
