@@ -25,7 +25,7 @@ jobs:
 
       # Initialize CodeQL before building so its C# extractor observes compilation.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: csharp
           build-mode: manual
@@ -48,4 +48,4 @@ jobs:
           if-no-files-found: warn
 
       - name: Analyze CodeQL database
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
