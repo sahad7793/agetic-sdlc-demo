@@ -18,6 +18,13 @@ public class TasksController(ITaskService service, ILogger<TasksController> logg
         return Ok(await service.GetAllAsync(status, cancellationToken));
     }
 
+    [HttpGet("overdue")]
+    [ProducesResponseType(typeof(IReadOnlyList<TaskResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<TaskResponse>>> GetOverdue(CancellationToken cancellationToken)
+    {
+        return Ok(await service.GetOverdueAsync(cancellationToken));
+    }
+
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(TaskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
