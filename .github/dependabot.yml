@@ -4,6 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # FluentAssertions v8+ switched from Apache 2.0 to the Xceed Community
+      # License, which requires a paid commercial license for commercial use.
+      # Stay on the free, Apache-licensed 6.x line. See PR #6 discussion.
+      - dependency-name: "FluentAssertions"
+        versions: [">=7.0.0"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
