@@ -18,6 +18,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Test SDLC metric contracts
+        run: python3 -m unittest discover -s tests/sdlc_metrics
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:

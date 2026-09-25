@@ -1,0 +1,484 @@
+{
+  "schema_version": 1,
+  "repository": "sahad7793/agetic-sdlc-demo",
+  "repository_created_at": "2026-09-23T13:52:31Z",
+  "collected_at": "2026-09-25T07:03:46Z",
+  "collector_commit": "283113b5cfd89e2a435d4c4c9be9556562af55cc",
+  "collection_finished_at": "2026-09-25T07:04:43Z",
+  "current": {
+    "start": "2026-09-18T00:00:00Z",
+    "end": "2026-09-25T00:00:00Z",
+    "observed_hours": 34.125,
+    "partial_repository_history": true,
+    "merged_prs": 19,
+    "pr_cycle": {
+      "samples": 19,
+      "median_hours": 5.203
+    },
+    "pr_cycle_by_author": {
+      "dependabot": {
+        "samples": 13,
+        "median_hours": 14.543
+      },
+      "copilot_authored": {
+        "samples": 1,
+        "median_hours": 0.211
+      },
+      "other_or_unknown": {
+        "samples": 5,
+        "median_hours": 0.055
+      }
+    },
+    "issue_lead_time": {
+      "samples": 1,
+      "median_hours": 0.215
+    },
+    "linked_merged_prs": 1,
+    "link_coverage_denominator": 19,
+    "issue_to_deployment": {
+      "available": false,
+      "reason": "Unavailable: automatic environment SHA and workflow_run head_sha do not independently identify the image built from the triggering CI SHA. No issue-to-deployment link is inferred."
+    },
+    "excluded": {
+      "external_issue_references": 3,
+      "negative_issue_durations": 0,
+      "negative_pr_durations": 0
+    },
+    "workflows": {
+      "ci": {
+        "total": 73,
+        "counts": {
+          "action_required": 3,
+          "failure": 5,
+          "success": 65
+        },
+        "decisive": 73,
+        "successes": 65,
+        "success_percent": 89.04,
+        "rerun_attempts": 3,
+        "by_trigger": {
+          "pull_request": {
+            "total": 54,
+            "counts": {
+              "action_required": 3,
+              "failure": 5,
+              "success": 46
+            },
+            "decisive": 54,
+            "successes": 46,
+            "success_percent": 85.19
+          },
+          "main_push": {
+            "total": 19,
+            "counts": {
+              "success": 19
+            },
+            "decisive": 19,
+            "successes": 19,
+            "success_percent": 100.0
+          },
+          "other": {
+            "total": 0,
+            "counts": {},
+            "decisive": 0,
+            "successes": 0,
+            "success_percent": null
+          }
+        }
+      },
+      "issue_triage": {
+        "total": 1,
+        "counts": {
+          "success": 1
+        },
+        "decisive": 1,
+        "successes": 1,
+        "success_percent": 100.0,
+        "rerun_attempts": 0
+      },
+      "weekly_report": {
+        "total": 1,
+        "counts": {
+          "success": 1
+        },
+        "decisive": 1,
+        "successes": 1,
+        "success_percent": 100.0,
+        "rerun_attempts": 0
+      }
+    },
+    "deployments": {
+      "staging": {
+        "total": 2,
+        "counts": {
+          "failure": 1,
+          "success": 1
+        },
+        "decisive": 2,
+        "successes": 1,
+        "success_percent": 50.0,
+        "successful_completions": 1,
+        "successful_completions_per_day": null
+      },
+      "production": {
+        "total": 1,
+        "counts": {
+          "skipped": 1
+        },
+        "decisive": 0,
+        "successes": 0,
+        "success_percent": null,
+        "successful_completions": 0,
+        "successful_completions_per_day": null
+      }
+    },
+    "dependabot_prs": {
+      "opened": 14,
+      "merged": 13
+    },
+    "alerts": {
+      "codeql": {
+        "available": true,
+        "reason": null,
+        "events": {
+          "created_at": 0,
+          "fixed_at": 0,
+          "dismissed_at": 0
+        }
+      },
+      "dependabot": {
+        "available": true,
+        "reason": null,
+        "events": {
+          "created_at": 0,
+          "fixed_at": 0,
+          "dismissed_at": 0
+        }
+      }
+    }
+  },
+  "previous": {
+    "start": "2026-09-11T00:00:00Z",
+    "end": "2026-09-18T00:00:00Z",
+    "observed_hours": 0,
+    "partial_repository_history": true,
+    "merged_prs": 0,
+    "pr_cycle": {
+      "samples": 0,
+      "median_hours": null
+    },
+    "pr_cycle_by_author": {
+      "dependabot": {
+        "samples": 0,
+        "median_hours": null
+      },
+      "copilot_authored": {
+        "samples": 0,
+        "median_hours": null
+      },
+      "other_or_unknown": {
+        "samples": 0,
+        "median_hours": null
+      }
+    },
+    "issue_lead_time": {
+      "samples": 0,
+      "median_hours": null
+    },
+    "linked_merged_prs": 0,
+    "link_coverage_denominator": 0,
+    "issue_to_deployment": {
+      "available": false,
+      "reason": "Unavailable: automatic environment SHA and workflow_run head_sha do not independently identify the image built from the triggering CI SHA. No issue-to-deployment link is inferred."
+    },
+    "excluded": {
+      "external_issue_references": 0,
+      "negative_issue_durations": 0,
+      "negative_pr_durations": 0
+    },
+    "workflows": {
+      "ci": {
+        "total": 0,
+        "counts": {},
+        "decisive": 0,
+        "successes": 0,
+        "success_percent": null,
+        "rerun_attempts": 0,
+        "by_trigger": {
+          "pull_request": {
+            "total": 0,
+            "counts": {},
+            "decisive": 0,
+            "successes": 0,
+            "success_percent": null
+          },
+          "main_push": {
+            "total": 0,
+            "counts": {},
+            "decisive": 0,
+            "successes": 0,
+            "success_percent": null
+          },
+          "other": {
+            "total": 0,
+            "counts": {},
+            "decisive": 0,
+            "successes": 0,
+            "success_percent": null
+          }
+        }
+      },
+      "issue_triage": {
+        "total": 0,
+        "counts": {},
+        "decisive": 0,
+        "successes": 0,
+        "success_percent": null,
+        "rerun_attempts": 0
+      },
+      "weekly_report": {
+        "total": 0,
+        "counts": {},
+        "decisive": 0,
+        "successes": 0,
+        "success_percent": null,
+        "rerun_attempts": 0
+      }
+    },
+    "deployments": {
+      "staging": {
+        "total": 0,
+        "counts": {},
+        "decisive": 0,
+        "successes": 0,
+        "success_percent": null,
+        "successful_completions": 0,
+        "successful_completions_per_day": null
+      },
+      "production": {
+        "total": 0,
+        "counts": {},
+        "decisive": 0,
+        "successes": 0,
+        "success_percent": null,
+        "successful_completions": 0,
+        "successful_completions_per_day": null
+      }
+    },
+    "dependabot_prs": {
+      "opened": 0,
+      "merged": 0
+    },
+    "alerts": {
+      "codeql": {
+        "available": true,
+        "reason": null,
+        "events": {
+          "created_at": 0,
+          "fixed_at": 0,
+          "dismissed_at": 0
+        }
+      },
+      "dependabot": {
+        "available": true,
+        "reason": null,
+        "events": {
+          "created_at": 0,
+          "fixed_at": 0,
+          "dismissed_at": 0
+        }
+      }
+    }
+  },
+  "inventory_at_collection": {
+    "dependabot_open_prs": 0,
+    "unfinished_deployment_jobs": [
+      {
+        "id": 107964583918,
+        "environment": "production",
+        "status": "waiting"
+      },
+      {
+        "id": 107954841852,
+        "environment": "production",
+        "status": "waiting"
+      },
+      {
+        "id": 107949907849,
+        "environment": "production",
+        "status": "waiting"
+      }
+    ],
+    "alerts": {
+      "codeql": {
+        "available": true,
+        "reason": null,
+        "states": {}
+      },
+      "dependabot": {
+        "available": true,
+        "reason": null,
+        "states": {}
+      }
+    }
+  },
+  "evidence_counts": {
+    "prs": 24,
+    "workflow_attempts": 90,
+    "deployment_jobs": 12
+  },
+  "initial_baseline": {
+    "start": "2026-09-23T13:52:31Z",
+    "end": "2026-09-25T07:03:46Z",
+    "observed_hours": 41.188,
+    "partial_repository_history": false,
+    "merged_prs": 23,
+    "pr_cycle": {
+      "samples": 23,
+      "median_hours": 1.892
+    },
+    "pr_cycle_by_author": {
+      "dependabot": {
+        "samples": 13,
+        "median_hours": 14.543
+      },
+      "copilot_authored": {
+        "samples": 1,
+        "median_hours": 0.211
+      },
+      "other_or_unknown": {
+        "samples": 9,
+        "median_hours": 0.051
+      }
+    },
+    "issue_lead_time": {
+      "samples": 1,
+      "median_hours": 0.215
+    },
+    "linked_merged_prs": 1,
+    "link_coverage_denominator": 23,
+    "issue_to_deployment": {
+      "available": false,
+      "reason": "Unavailable: automatic environment SHA and workflow_run head_sha do not independently identify the image built from the triggering CI SHA. No issue-to-deployment link is inferred."
+    },
+    "excluded": {
+      "external_issue_references": 3,
+      "negative_issue_durations": 0,
+      "negative_pr_durations": 0
+    },
+    "workflows": {
+      "ci": {
+        "total": 81,
+        "counts": {
+          "action_required": 3,
+          "failure": 5,
+          "success": 73
+        },
+        "decisive": 81,
+        "successes": 73,
+        "success_percent": 90.12,
+        "rerun_attempts": 3,
+        "by_trigger": {
+          "pull_request": {
+            "total": 58,
+            "counts": {
+              "action_required": 3,
+              "failure": 5,
+              "success": 50
+            },
+            "decisive": 58,
+            "successes": 50,
+            "success_percent": 86.21
+          },
+          "main_push": {
+            "total": 23,
+            "counts": {
+              "success": 23
+            },
+            "decisive": 23,
+            "successes": 23,
+            "success_percent": 100.0
+          },
+          "other": {
+            "total": 0,
+            "counts": {},
+            "decisive": 0,
+            "successes": 0,
+            "success_percent": null
+          }
+        }
+      },
+      "issue_triage": {
+        "total": 2,
+        "counts": {
+          "success": 2
+        },
+        "decisive": 2,
+        "successes": 2,
+        "success_percent": 100.0,
+        "rerun_attempts": 0
+      },
+      "weekly_report": {
+        "total": 1,
+        "counts": {
+          "success": 1
+        },
+        "decisive": 1,
+        "successes": 1,
+        "success_percent": 100.0,
+        "rerun_attempts": 0
+      }
+    },
+    "deployments": {
+      "staging": {
+        "total": 6,
+        "counts": {
+          "failure": 1,
+          "success": 5
+        },
+        "decisive": 6,
+        "successes": 5,
+        "success_percent": 83.33,
+        "successful_completions": 5,
+        "successful_completions_per_day": null
+      },
+      "production": {
+        "total": 6,
+        "counts": {
+          "pending": 3,
+          "skipped": 1,
+          "success": 2
+        },
+        "decisive": 2,
+        "successes": 2,
+        "success_percent": 100.0,
+        "successful_completions": 2,
+        "successful_completions_per_day": null
+      }
+    },
+    "dependabot_prs": {
+      "opened": 14,
+      "merged": 13
+    },
+    "alerts": {
+      "codeql": {
+        "available": true,
+        "reason": null,
+        "events": {
+          "created_at": 0,
+          "fixed_at": 0,
+          "dismissed_at": 0
+        }
+      },
+      "dependabot": {
+        "available": true,
+        "reason": null,
+        "events": {
+          "created_at": 0,
+          "fixed_at": 0,
+          "dismissed_at": 0
+        }
+      }
+    }
+  }
+}
