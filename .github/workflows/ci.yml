@@ -21,6 +21,9 @@ jobs:
       - name: Test SDLC metric contracts
         run: python3 -m unittest discover -s tests/sdlc_metrics
 
+      - name: Test rollback contracts
+        run: python3 -m unittest discover -s tests/rollback
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:

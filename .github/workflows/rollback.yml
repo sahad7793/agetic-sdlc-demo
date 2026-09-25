@@ -1,0 +1,83 @@
+name: Rollback
+run-name: Rollback ${{ inputs.environment }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back (production requires approval)
+        type: choice
+        options: [staging, production]
+        required: true
+      target:
+        description: How to select the rollback image
+        type: choice
+        options: [previous successful deployment, explicit image]
+        default: previous successful deployment
+        required: true
+      image:
+        description: Explicit digest or evidence-backed tag (leave empty for previous)
+        type: string
+        required: false
+      reason:
+        description: Incident or reason for rollback (max 2000 characters)
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  rollback:
+    name: Rollback ${{ inputs.environment }} image
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: containerapp-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      TARGET_MODE: ${{ inputs.target }}
+      TARGET_IMAGE: ${{ inputs.image }}
+      ROLLBACK_REASON: ${{ inputs.reason }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve, roll back, and verify image
+        run: python3 scripts/rollback.py run "$RUNNER_TEMP/rollback-audit.json"
+
+      - name: Publish rollback audit
+        if: always()
+        run: |
+          if [ -f scripts/rollback.py ]; then
+            python3 scripts/rollback.py summary "$RUNNER_TEMP/rollback-audit.json"
+          else
+            python3 - <<'PY'
+          import html
+          import os
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write("## Rollback did not run\n\nTrusted checkout failed; from/to images unresolved.\n")
+              for key in ("TARGET_ENVIRONMENT", "TARGET_MODE", "TARGET_IMAGE", "ROLLBACK_REASON",
+                          "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"):
+                  output.write(f"<p>{key}</p><pre>{html.escape(os.environ.get(key, 'Not available'))}</pre>\n")
+          PY
+          fi

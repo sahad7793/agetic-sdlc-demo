@@ -30,6 +30,107 @@ The following GitHub Environment variables are required for both `staging` and `
 
 The production approval gate is configured in **Settings > Environments > production**. Its required reviewer must remain enabled; do not deploy production directly with Azure CLI because that bypasses the approval audit trail.
 
+## Rollback
+
+Use **Actions > Rollback > Run workflow** on `main` after a bad release, failed
+health check, or alert. This is an operator-triggered recovery workflow, not an
+automatic response to alerts. It reuses an existing image: no build, Git revert,
+infrastructure deployment, new secret, or identity change is involved.
+
+Choose `staging` or `production`, select a target, and provide an incident reference
+or explanation in `reason` (required, nonblank, at most 2000 characters):
+
+| Target | Image input | Behavior |
+| --- | --- | --- |
+| `previous successful deployment` | Leave empty | Finds the most recent successful deployment of a **different image before the current image's deployment**, in the chosen environment's retained Deploy history. |
+| `explicit image` | `sha256:<64 lowercase hex characters>` or the full configured ACR `taskmanagement-api@sha256:...` reference | Deploys exactly that digest. An operator must verify its suitability; this option does not require successful-deployment history. |
+| `explicit image` | A tag, or the full configured ACR `taskmanagement-api:<tag>` reference | Resolves the tag using retained successful Build/publish evidence and its deployment digest, then deploys the digest, **not the mutable tag**. Unknown tags and tags rebuilt to different digests fail; supply a verified digest instead. |
+
+For example, using the GitHub CLI:
+
+```bash
+gh workflow run rollback.yml --ref main \
+  -f environment=staging \
+  -f target='previous successful deployment' \
+  -f reason='Incident 123: elevated HTTP 5xx after release'
+```
+
+For production, change `environment=production`. The job uses the **existing
+`environment: production` required-reviewer gate** before login or any Azure
+operation. Approve it in the Actions run; do not work around approval with a
+direct Azure CLI update. Existing environment variables and `azure/login@v2`
+provide OIDC authentication, including the existing numeric-ID subject
+configuration described above. No additional ACR read permission is required for
+tag resolution. Dispatches from other branches do not execute the rollback job.
+
+### Selection and verification guarantees
+
+`scripts/rollback.py` queries the exact `deploy.yml` workflow, all retained
+attempts, and the named target-environment deployment jobs. It reads digest
+references from the runner's deployment command environment header within that
+step's timestamps. It does **not** infer images from a commit SHA, mutable current
+tag, or an automatic GitHub deployment record. Staging success still counts when
+the same run's production job is waiting, rejected, or failed. Reused jobs across
+reruns count once.
+
+The current desired Container App image anchors the search, even when that
+deployment failed its health check. Successful older jobs must have completed
+before the anchor deployment started. Same-image redeployments are skipped;
+ambiguous/overlapping deployment ordering, missing or expired logs, and missing
+predecessors fail clearly **without updating the app**. A previous rollback can
+leave an older image current; the next automatic rollback searches before that
+image's latest matching Deploy occurrence rather than picking a newer release again.
+An image introduced outside Deploy requires an explicit digest if its provenance
+cannot be found.
+
+The workflow supports the existing single-container, Single-revision topology.
+It records both the desired image and the ready revision's image because Azure
+may keep the old revision serving after a failed update. It rechecks state just
+before mutation, updates only the named container's image, then requires the
+target digest to become the latest ready, active, healthy revision and polls
+`/health` with bounded requests for approximately two minutes. A healthy old
+revision is not accepted as successful rollback. Image provisioning has a separate
+timeout; the whole job is bounded. API errors or failed verification fail the run,
+and **never initiate a second automatic rollback**.
+
+The run's **Summary > Rollback audit** records requested target, observed from/to
+images, previously ready image/revision, source deployment job and attempt,
+original actor, rerun actor, reason, and outcome/error. If resolution or login
+fails, unresolved fields are explicitly marked rather than reported as success.
+After a failure, inspect the summary and Container App revisions/logs before
+retrying with corrected evidence or an explicit known-good digest.
+
+### Operational limits
+
+**This rolls back the container image only, not database schema, migrations,
+data, configuration, secrets, or infrastructure.** An older image must remain
+compatible with the current SQL schema; any startup migration behavior belongs to
+that image and is not undone or suppressed by this workflow. Registry images must
+still exist and remain pullable by the app's existing managed identity.
+
+"Successful deployment" is pipeline evidence, not proof that a release is
+incident-free. Historical production Deploy jobs do not run `/health`; Rollback
+does run it for both environments. A passing health check does not verify every
+business operation or guarantee that alerts have resolved. Logs deleted or expired
+by GitHub retention cannot be recovered, and tags are resolved to recorded build
+digests rather than their current registry meaning.
+
+Deploy and Rollback share per-environment job concurrency groups and do not cancel
+a running update. GitHub concurrency is **not FIFO** and a new pending job can
+replace an older pending job. Review/cancel unwanted pending Deploy runs,
+including production jobs awaiting approval, during incident handling: a later
+normal deployment can replace the rolled-back image. This does not freeze
+releases. Azure operations outside these workflows are not covered by the lock;
+the pre-update drift check reduces, but cannot atomically eliminate, that race.
+Runs already started from an older Deploy workflow version also lack the new
+lock and should be allowed to finish or cancelled before rollback.
+
+The separate `Rollback` workflow and `Rollback <environment> image` job are
+recovery evidence for future metrics, **not regular deployments**. The SDLC
+metrics collector intentionally queries only `deploy.yml` for delivery
+reliability/frequency; rollback runs do not change those denominators. No new
+dashboard fields are added by this change.
+
 ## Observability
 
 Application Insights and Log Analytics were provisioned per environment from the start, but until this change nothing consumed the telemetry proactively — no alerts, no action groups, no dashboard. This section closes that gap with additive Bicep resources; no application code, deployment workflow logic, or existing SQL/identity setup was changed except one required wiring fix (below).

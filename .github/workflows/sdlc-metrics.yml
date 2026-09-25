@@ -32,6 +32,7 @@ jobs:
         run: python3 -m unittest discover -s tests/sdlc_metrics
 
       - name: Collect read-only metrics
+        # The collector's exact workflow allowlist excludes rollback.yml from delivery metrics.
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}

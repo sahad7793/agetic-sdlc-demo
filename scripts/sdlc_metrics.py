@@ -19,6 +19,7 @@ import urllib.request
 SCHEMA_VERSION = 1
 API_ROOT = "https://api.github.com"
 DASHBOARD_MARKER = "<!-- sdlc-metrics-dashboard:v1 -->"
+# Deliberate allowlist: rollback.yml is recovery, not a regular delivery operation.
 WORKFLOWS = {
     "ci": "ci.yml",
     "deploy": "deploy.yml",
