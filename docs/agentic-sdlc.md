@@ -298,6 +298,135 @@ responding and when, based on what the operator reports. Treat the SLA table
 as policy, and the alert-context fields as exactly what was typed in — verify
 independently before acting on them for anything safety-critical.
 
+## Performance and load-testing gate
+
+There was no performance signal anywhere in the pipeline before this change:
+CI proved the API builds, passes unit/integration tests, and is scanned by
+CodeQL, but nothing measured latency, throughput, or error rate under
+concurrent load, and nothing would catch a request-handling regression before
+merge. This closes that gap with a **local/CI-only** load test — it never
+runs against a deployed staging or production environment automatically.
+
+### What was added
+
+- **`tests/performance/task-api-load.js`** — a [k6](https://k6.io) script with
+  two bounded (`per-vu-iterations`, not open-ended-duration) scenarios:
+  - `reads` — pure `GET /health`, `GET /api/tasks`, `GET /api/tasks/overdue`
+    traffic. Safe by construction; touches no other task's data.
+  - `lifecycle` — each iteration creates one task it owns (a uniquely titled
+    `perf-test-<uuid>` task), reads it back, transitions its status
+    `Todo → InProgress` (the only transition the business rules allow from a
+    fresh task), then deletes it. Every mutation is scoped to data the
+    iteration itself created, so the run is idempotent and self-cleaning —
+    nothing is left behind, and nothing pre-existing is read, written, or
+    deleted.
+  - The script has **no `thresholds` block** — it only measures and exports
+    `perf-results/summary.json`. Pass/fail is entirely `perf_gate.py`'s job.
+- **`scripts/perf_gate.py`** — a deterministic (no LLM, no network calls)
+  comparator with two subcommands:
+  - `compare` (run automatically in CI) reads a k6 summary + `baseline.json`,
+    renders a markdown report to the job summary and `perf-results/gate-report.md`,
+    and decides pass/fail. In `--mode advisory` (the default, and the only
+    mode the workflow uses automatically) it **always exits 0** — the job
+    never fails because of a slow run, only reports it. `--mode strict` is
+    available for a maintainer to opt into later, once there's a track record
+    of real baselines.
+  - `capture-baseline` is a **maintainer-run-only** helper, never invoked by
+    any workflow, that turns one reviewed `summary.json` into a new,
+    committed `baseline.json`.
+- **`tests/performance/baseline.json`** — ships as an explicit **bootstrap
+  placeholder** (`"status": "unset"`, empty `scenarios: {}`). It intentionally
+  contains **no invented latency/error/throughput numbers**. `perf_gate.py`
+  special-cases this: every row in the report reads "no baseline yet" and the
+  gate cannot fail, in either mode, until a human promotes a real baseline
+  (see below). The tolerance multipliers it will apply once a baseline exists
+  are documented in the file itself (`p95`/`p99` latency multipliers, a hard
+  error-rate cap, and a minimum-throughput multiplier) — deliberately
+  generous headroom bands, not production SLOs.
+- **`.github/workflows/performance.yml`**:
+  - `local-load-test` (pull requests touching the API/perf files, plus manual
+    `workflow_dispatch`) builds the API, starts it as a background process on
+    `localhost` against a **temporary SQLite file** (`Database:UseAzureSql` is
+    already `false` by default), polls `/health` with bounded retries, runs
+    the k6 script, then runs `perf_gate.py compare --mode advisory` and
+    uploads `perf-results/` (including the API's own log) as a build
+    artifact. Nothing in this job touches Azure or requires any secret.
+  - `staging-smoke-load` is **manual-only** (`workflow_dispatch`) and gated
+    behind two independent inputs the caller must both set
+    (`run_staging_smoke: true` *and* `confirm: yes`) — mirroring the
+    double-confirmation pattern already used by the `Rollback` workflow. It
+    signs in with the existing Azure OIDC federation, resolves the staging
+    Container App's FQDN, and runs the k6 script with
+    `PERF_TEST_READS_ONLY=true` (which drops the `lifecycle` scenario
+    entirely at script-load time, so it is structurally impossible for this
+    job to send a mutating request) at a small fixed size (2 VUs × 5
+    iterations). This job is **never dispatched automatically** by anything
+    in this repository.
+- **`tests/perf_gate/test_perf_gate.py`** — unit/integration tests covering
+  metric extraction, tolerance-multiplier math, the bootstrap/unset baseline
+  path, advisory-vs-strict exit codes, and `capture-baseline`. Wired into CI
+  alongside the other `tests/*` contract suites.
+
+### Baseline lifecycle (why there's no number in `baseline.json` yet)
+
+1. **Now:** `baseline.json` ships `"status": "unset"`. The gate runs on every
+   relevant PR, always exits 0, and its report always says "no baseline yet".
+   This is intentionally not useful for catching regressions on day one — its
+   purpose right now is to prove the harness itself works end-to-end.
+2. **After a few real CI runs:** a maintainer reviews several
+   `perf-results/summary.json` artifacts from ordinary (non-regressed) PRs to
+   confirm they look stable and representative of the shared GitHub-hosted
+   runner, then picks one and runs, locally or by downloading the artifact:
+   `python3 scripts/perf_gate.py capture-baseline --from summary.json`. This
+   overwrites `tests/performance/baseline.json` with `"status": "set"` and the
+   observed p50/p95/p99/error-rate/throughput numbers, preserving the
+   existing tolerance multipliers. The maintainer reviews the diff and opens
+   it as its own PR — `capture-baseline` is never run by CI.
+3. **From then on:** `compare` has real numbers to check against. It keeps
+   running in `--mode advisory` (report-only) until there's enough
+   confidence in the baseline's stability to switch the workflow to
+   `--mode strict`, which is the point at which a genuine regression can fail
+   the job.
+
+### Security, permissions, and data-safety notes
+
+- `local-load-test` requests only `contents: read`; it needs no Azure
+  credential, `id-token`, or repository secret, because it never leaves the
+  GitHub-hosted runner.
+- `staging-smoke-load` requests `contents: read` and `id-token: write` (for
+  the existing OIDC federation, reused as-is — no new credential was added)
+  and runs under the `staging` **environment**, so it is subject to whatever
+  required reviewers/protection rules are configured for that environment,
+  the same as `Rollback`'s and `Deploy`'s staging jobs.
+- Both jobs are GET-only or self-contained-mutation-only by construction: the
+  `lifecycle` scenario only ever creates, reads, transitions, and deletes
+  tasks it created itself in that same iteration, and the staging job cannot
+  reach that scenario at all (`PERF_TEST_READS_ONLY=true` removes it from the
+  k6 `scenarios` map before the test run starts, it is not just skipped at
+  request time).
+- Nothing in this gate reads or writes Application Insights, Key Vault, or
+  any other Azure resource beyond resolving the Container App's FQDN for the
+  manual staging smoke job.
+
+### Limitations
+
+- **k6's runtime cost/duration is bounded, not zero.** `local-load-test` has a
+  15-minute job timeout and both k6 scenarios use bounded iteration counts
+  (5 VUs × 10 iterations each by default), not open-ended duration — this is
+  a smoke-sized load test suitable for a PR check, not a capacity/stress test.
+- **The bootstrap baseline means the gate cannot catch anything yet.** Until
+  a maintainer runs `capture-baseline` and reviews the result, every PR's
+  report will say "no baseline yet" — this is expected, not a bug.
+- **Advisory mode never fails the build**, by design, even after a baseline
+  exists — `--mode strict` is a deliberate, separate opt-in.
+- **A shared GitHub-hosted runner is noisy.** Baselines captured here reflect
+  that runner's variable CPU/IO characteristics, not a dedicated or
+  production-representative environment; treat tolerance multipliers as
+  generous headroom for that noise, not a precise SLO.
+- **The staging smoke job is not run by this change, or by any automation.**
+  It exists as an opt-in, double-confirmed, read-only capability for a human
+  to use deliberately; nothing in this repository schedules or triggers it.
+
 ## Observability
 
 Application Insights and Log Analytics were provisioned per environment from the start, but until this change nothing consumed the telemetry proactively — no alerts, no action groups, no dashboard. This section closes that gap with additive Bicep resources; no application code, deployment workflow logic, or existing SQL/identity setup was changed except one required wiring fix (below).
