@@ -33,6 +33,9 @@ jobs:
       - name: Test performance-gate contracts
         run: python3 -m unittest discover -s tests/perf_gate
 
+      - name: Test cost-governance report contracts
+        run: python3 -m unittest discover -s tests/cost_governance
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:

@@ -9,6 +9,11 @@ tenant_id='d2b7e8c1-8c48-4a61-b850-337bd895c756'
 sql_administrator_object_id='4812e4b4-e014-4375-9e29-3bf290bfcc23'
 sql_administrator_login='sahad@saasberrylabs.com'
 alert_email='sahad@saasberrylabs.com'
+# Cost-allocation tags (see docs/agentic-sdlc.md > Cost governance). These are
+# placeholders: replace with your organization's actual cost-center code and
+# accountable owner/team before running this script. There is no safe default.
+cost_center_tag='CHANGEME-cost-center'
+owner_tag='CHANGEME-owner-or-team'
 shared_resource_group='rg-taskmanagement-shared'
 container_registry_name='tmapi8a58968e'
 staging_resource_group='rg-taskmanagement-staging-centralus'
@@ -50,6 +55,8 @@ az deployment group create \
     productionResourceGroupName="$production_resource_group" \
     productionContainerAppName="$production_container_app_name" \
     workbookLocation="$shared_location" \
+    costCenter="$cost_center_tag" \
+    owner="$owner_tag" \
     tags="{\"application\":\"taskmanagement\",\"component\":\"registry\"}" \
   --output none
 
@@ -78,6 +85,8 @@ provision_environment() {
       sqlAdministratorObjectId="$sql_administrator_object_id" \
       sqlAdministratorLogin="$sql_administrator_login" \
       alertEmail="$alert_email" \
+      costCenter="$cost_center_tag" \
+      owner="$owner_tag" \
       tags="{\"application\":\"taskmanagement\",\"environment\":\"$environment_name\"}" \
     --output none
 

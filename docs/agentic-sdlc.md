@@ -629,6 +629,152 @@ work. Do not interpret these metrics as individual productivity, escaped-defect
 rate, DORA change-failure rate, MTTR, or proof of advice quality. Those require
 additional evidence that this report deliberately does not invent.
 
+## Cost governance
+
+This closes the cost-governance maturity gap with a cost-allocation tag standard
+enforced in IaC, a manual operator runbook for budgets/alerts, and a manual,
+read-only, non-monetary governance report. No Azure resource, budget, alert, or
+tag on an already-provisioned resource is created, changed, or deleted by any
+script or workflow in this section; every mutating action below is explicitly
+operator-run. This repository is **public**, so no dollar amount, spend
+figure, or budget threshold is ever collected, logged, or published by
+anything described here — see "Manual governance report" for how that boundary
+is enforced structurally, not just by convention.
+
+### Cost-allocation tag standard
+
+Every environment and shared resource carries these tags, aligned with the
+[Cloud Adoption Framework tagging guidance](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging):
+
+| Tag | Meaning | Source |
+| --- | --- | --- |
+| `application` | Fixed to `taskmanagement`. | `scripts/provision-infrastructure.sh` |
+| `environment` | `staging` or `production`. | `infra/environment.bicep` |
+| `component` | Set on shared resources (e.g. `registry`). | `scripts/provision-infrastructure.sh` |
+| `costCenter` | The organization's cost-center/GL code accountable for this resource's spend. | Required Bicep parameter — **no default** |
+| `owner` | The team or individual accountable for this resource. | Required Bicep parameter — **no default** |
+
+`infra/shared.bicep` and `infra/environment.bicep` require `costCenter` and
+`owner` as explicit parameters and merge them into every resource's tags with
+`union()`, so they can't be silently omitted on a future deployment. They
+intentionally have no default value: inventing a placeholder cost-center or
+owner here would create false confidence in a value nobody chose. Operators
+must supply their organization's real values via
+`scripts/provision-infrastructure.sh`'s `cost_center_tag`/`owner_tag`
+variables (clearly marked `CHANGEME-*`) before running it.
+
+**This only affects future provisioning.** The six existing
+`rg-taskmanagement-*` resource groups (three actively used, three preserved
+region-fallback groups from `.azure/deployment-plan.md`'s Deployment Recovery
+history) were provisioned before this standard existed and currently carry
+only `application`/`environment`. Retrofitting them is a manual step — see
+below — not something this change applies automatically, because doing so
+would be a live Azure mutation outside this repository's automation.
+
+### Operator runbook: budgets, alerts, and tag retrofit
+
+All commands below are run manually by an operator with the required role
+(table below); none are automated by a script or workflow in this repository.
+
+**1. Retrofit tags onto existing resources.** Run per resource group, after
+substituting the organization's real values for the placeholders:
+
+```bash
+COST_CENTER='<your-real-cost-center-code>'
+OWNER='<your-real-owner-or-team>'
+for rg in rg-taskmanagement-shared rg-taskmanagement-staging-centralus rg-taskmanagement-production-westus2 \
+          rg-taskmanagement-staging rg-taskmanagement-production rg-taskmanagement-production-centralus; do
+  az tag update --resource-id "$(az group show --name "$rg" --query id -o tsv)" \
+    --operation merge --tags costCenter="$COST_CENTER" owner="$OWNER"
+done
+```
+
+Extend to child resources (Container Apps, SQL servers, ACR, etc.) with
+`az resource tag` if per-resource (not just per-resource-group) tagging is
+required for your cost reports; Azure Cost Management can also
+[inherit resource-group tags onto child resources](https://learn.microsoft.com/azure/cost-management-billing/costs/enable-tag-inheritance)
+without retagging every resource individually.
+
+**2. Create a budget.** No threshold is proposed here — set one from your own
+historical spend and business judgement, at the resource-group scope (so
+staging and production alert independently) or subscription scope, using
+either the Portal (**Cost Management + Billing > Budgets**) or the
+[Bicep quickstart](https://learn.microsoft.com/azure/cost-management-billing/costs/quick-create-budget-bicep). Do not create a budget scoped so broadly that
+an unrelated subscription workload triggers a false alert for this
+application.
+
+**3. Wire alert delivery.** Reuse the per-environment Action Groups already
+created by `infra/observability.bicep` (`task-api-stage-*-ag`,
+`task-api-prod-west-*-ag`) if budget alerts should reach the same on-call
+recipients as availability/error alerts, or create a separate finance-facing
+Action Group if spend alerts should go to different people. Either is a valid
+operator choice; this repository does not prescribe one.
+
+**4. Review the orphaned region-fallback resource groups.**
+`rg-taskmanagement-staging`, `rg-taskmanagement-production` (both `eastus2`),
+and `rg-taskmanagement-production-centralus` were preserved, not deleted,
+after the region-capacity failures documented in `.azure/deployment-plan.md`'s
+Deployment Recovery section. They are a cost-governance finding — review
+their contents and decide whether to delete them — but this repository does
+not delete them automatically; that decision and action belong to an
+operator who can confirm nothing in them is still relied upon.
+
+**Required roles:**
+
+| Task | Minimum built-in role | Scope |
+| --- | --- | --- |
+| View cost data, budgets, alert configuration | `Cost Management Reader` | Subscription or resource group |
+| Create/edit/delete budgets | `Cost Management Contributor` (or `Owner`/`Contributor`, which already include it) | Subscription or resource group |
+| Retag existing resources | `Tag Contributor` (or `Owner`/`Contributor`) | Resource group or resource |
+| Create/manage Action Groups | `Monitoring Contributor` (or `Owner`/`Contributor`) | Resource group |
+
+### Manual governance report
+
+`scripts/cost_governance_report.py` and `.github/workflows/cost-governance-report.yml`
+report **tag compliance, resource inventory, and budget/alert existence only —
+never a dollar amount, threshold, forecast, or Cost Management billing figure.**
+This is structurally enforced, not just a convention: the report's Azure OIDC
+credential is granted **`Reader` only**, which cannot call the Cost Management
+billing APIs at all — the safest way to guarantee no spend figure can leak is
+for the credential to lack permission to read one.
+
+It follows `scripts/sdlc_metrics.py`'s conventions: deterministic (no LLM), a
+`collect` subcommand that writes `report.md`/`report.json`/`evidence.json`,
+fixture-driven tests with no live network calls
+(`tests/cost_governance`, wired into `ci.yml`), and fails collection closed
+rather than reporting a fabricated compliance percentage when a resource group
+can't be enumerated.
+
+**What it reports:**
+- Tag compliance: the percentage of resources across the six
+  `rg-taskmanagement-*` resource groups carrying all of `application`,
+  `environment`, `costCenter`, and `owner`.
+- Resource inventory: counts and types per resource group/environment.
+- Budget and Action Group **existence** (present/absent, and count) per scope —
+  amounts, current spend, and forecast fields are never read or written.
+
+**Trigger and permissions:** `workflow_dispatch` only (no `schedule:` yet — see
+"Operator setup" below); job permissions are `contents: read` and
+`id-token: write` only. There is no `issues: write` permission and no publish
+step in this iteration: output stays in the run's step summary and a 90-day
+artifact (matching the SDLC metrics workflow's retention), not a public
+dashboard issue, to keep a brand-new Azure-reading credential's blast radius
+minimal for a first iteration. Extending this to the
+[SDLC metrics dashboard](#sdlc-metrics-dashboard) (e.g. a "tag compliance %"
+row) or a dedicated public issue is a natural next step once the credential has
+operated safely for a period, but is not built now.
+
+**Operator setup required before dispatch:** a new Entra app registration and
+OIDC federated credential for a `cost-governance` GitHub Environment, granted
+`Reader` **only** at subscription scope — deliberately not `Cost Management
+Reader`, for the structural reason above. This follows the same pattern as the
+existing `staging`/`production` OIDC setup in "Operator configuration": the
+operator creates the app registration and federated credential and sets the
+GitHub Environment variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`); this repository does not create the credential
+itself. Until that exists, the workflow can be reviewed and its tests run, but
+should not be dispatched.
+
 ## Getting started for the repository owner
 
 ### 1. Enable security features

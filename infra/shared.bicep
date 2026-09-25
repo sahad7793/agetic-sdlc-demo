@@ -24,8 +24,22 @@ param productionContainerAppName string
 @description('Azure region to store the shared observability workbook in.')
 param workbookLocation string = location
 
-@description('Tags applied to every shared resource.')
+@description('Cost-allocation tag identifying the owning cost center/GL code for shared resources. No default: the operator must supply the organization\'s actual value.')
+param costCenter string
+
+@description('Cost-allocation tag identifying the owning team or individual accountable for shared-resource spend. No default: the operator must supply the organization\'s actual value.')
+param owner string
+
+@description('Free-form tags applied to every shared resource, in addition to the required cost-allocation tags below.')
 param tags object = {}
+
+// Cost-governance allocation tags (costCenter/owner) are enforced here so every
+// shared resource always carries them, regardless of what the caller's
+// free-form `tags` parameter contains. See docs/agentic-sdlc.md > Cost governance.
+var resourceTags = union(tags, {
+  costCenter: costCenter
+  owner: owner
+})
 
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: containerRegistryName
@@ -33,7 +47,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' =
   sku: {
     name: 'Basic'
   }
-  tags: tags
+  tags: resourceTags
   properties: {
     adminUserEnabled: false
     publicNetworkAccess: 'Enabled'
@@ -99,7 +113,7 @@ module observabilityWorkbook 'workbook.bicep' = {
     productionApplicationInsightsId: productionApplicationInsightsId
     stagingContainerAppId: stagingContainerAppId
     productionContainerAppId: productionContainerAppId
-    tags: tags
+    tags: resourceTags
   }
 }
 
