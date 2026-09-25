@@ -1,3 +1,4 @@
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.EntityFrameworkCore;
 using TaskManagement.Api.Data;
 using TaskManagement.Api.Repositories;
@@ -8,6 +9,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// Wires the Application Insights connection string (already provided as an env var by
+// infra/environment.bicep) to the OpenTelemetry distro so request and SQL dependency
+// telemetry actually flow to Application Insights for the observability alerts/workbook.
+if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+{
+    builder.Services.AddOpenTelemetry().UseAzureMonitor();
+}
 
 var useAzureSql = builder.Configuration.GetValue<bool>("Database:UseAzureSql");
 var connectionString = builder.Configuration.GetConnectionString("TaskManagement")

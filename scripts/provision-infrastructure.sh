@@ -8,12 +8,15 @@ shared_location='eastus2'
 tenant_id='d2b7e8c1-8c48-4a61-b850-337bd895c756'
 sql_administrator_object_id='4812e4b4-e014-4375-9e29-3bf290bfcc23'
 sql_administrator_login='sahad@saasberrylabs.com'
+alert_email='sahad@saasberrylabs.com'
 shared_resource_group='rg-taskmanagement-shared'
 container_registry_name='tmapi8a58968e'
 staging_resource_group='rg-taskmanagement-staging-centralus'
 production_resource_group='rg-taskmanagement-production-westus2'
 staging_deployment_principal_id='d0438719-b01f-44c3-b191-da7e925aca4a'
 production_deployment_principal_id='b3324232-392c-47b3-8539-094a018a505c'
+staging_container_app_name='task-api-stage-8a58968e'
+production_container_app_name='task-api-prod-west-8a58968e'
 
 az account set --subscription "$subscription_id"
 
@@ -42,6 +45,11 @@ az deployment group create \
     location="$shared_location" \
     containerRegistryName="$container_registry_name" \
     stagingDeploymentPrincipalId="$staging_deployment_principal_id" \
+    stagingResourceGroupName="$staging_resource_group" \
+    stagingContainerAppName="$staging_container_app_name" \
+    productionResourceGroupName="$production_resource_group" \
+    productionContainerAppName="$production_container_app_name" \
+    workbookLocation="$shared_location" \
     tags="{\"application\":\"taskmanagement\",\"component\":\"registry\"}" \
   --output none
 
@@ -69,6 +77,7 @@ provision_environment() {
       managedIdentityName="$managed_identity_name" \
       sqlAdministratorObjectId="$sql_administrator_object_id" \
       sqlAdministratorLogin="$sql_administrator_login" \
+      alertEmail="$alert_email" \
       tags="{\"application\":\"taskmanagement\",\"environment\":\"$environment_name\"}" \
     --output none
 
@@ -81,8 +90,8 @@ provision_environment() {
     --scope "$container_registry_id" >/dev/null
 }
 
-provision_environment staging "$staging_resource_group" "$staging_location" 'task-api-stage-8a58968e' 'task-cae-stage-8a58968e' 'tasksqlstage8a58968e' 'task-api-stage-identity'
-provision_environment production "$production_resource_group" "$production_location" 'task-api-prod-west-8a58968e' 'task-cae-prod-west-8a58968e' 'tasksqlprodwu8a58968e' 'task-api-prod-west-identity'
+provision_environment staging "$staging_resource_group" "$staging_location" "$staging_container_app_name" 'task-cae-stage-8a58968e' 'tasksqlstage8a58968e' 'task-api-stage-identity'
+provision_environment production "$production_resource_group" "$production_location" "$production_container_app_name" 'task-cae-prod-west-8a58968e' 'tasksqlprodwu8a58968e' 'task-api-prod-west-identity'
 
 for environment in staging production; do
   if [ "$environment" = staging ]; then

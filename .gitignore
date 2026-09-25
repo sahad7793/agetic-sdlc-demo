@@ -26,6 +26,7 @@ coverage/
 .azure/*
 !.azure/deployment-plan.md
 infra/*.json
+!infra/workbook-content.json
 
 # OS files
 .DS_Store

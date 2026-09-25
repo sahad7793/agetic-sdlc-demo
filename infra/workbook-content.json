@@ -1,0 +1,108 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## Task Management API — Observability\nRequest rate, failure rate, p95 latency, and SQL dependency health across **staging** and **production**."
+      },
+      "name": "header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| extend Environment = tostring(split(_ResourceId, \"/\")[-1])\n| summarize Requests = count(), Failures = countif(success == false) by bin(timestamp, 5m), Environment\n| order by timestamp asc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "crossComponentResources": [
+          "{0}",
+          "{1}"
+        ],
+        "visualization": "linechart",
+        "title": "Request rate and failure count"
+      },
+      "name": "request-rate"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| extend Environment = tostring(split(_ResourceId, \"/\")[-1])\n| summarize P95DurationMs = percentile(duration, 95) by bin(timestamp, 5m), Environment\n| order by timestamp asc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "crossComponentResources": [
+          "{0}",
+          "{1}"
+        ],
+        "visualization": "linechart",
+        "title": "p95 request latency (ms)"
+      },
+      "name": "p95-latency"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "dependencies\n| where type == \"SQL\"\n| extend Environment = tostring(split(_ResourceId, \"/\")[-1])\n| summarize Calls = count(), Failures = countif(success == false), AvgDurationMs = avg(duration) by bin(timestamp, 5m), Environment\n| order by timestamp asc",
+        "size": 0,
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "crossComponentResources": [
+          "{0}",
+          "{1}"
+        ],
+        "visualization": "linechart",
+        "title": "Azure SQL dependency health (calls, failures, avg duration)"
+      },
+      "name": "sql-dependency-health"
+    },
+    {
+      "type": 10,
+      "content": {
+        "chartId": "replicas-restarts-chart",
+        "version": "MetricsItem/2.0",
+        "size": 0,
+        "chartType": 2,
+        "resourceType": "microsoft.app/containerapps",
+        "metricScope": 0,
+        "resourceIds": [
+          "{2}",
+          "{3}"
+        ],
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "metrics": [
+          {
+            "namespace": "microsoft.app/containerapps",
+            "metric": "microsoft.app/containerapps-Replicas",
+            "aggregation": 3
+          },
+          {
+            "namespace": "microsoft.app/containerapps",
+            "metric": "microsoft.app/containerapps-RestartCount",
+            "aggregation": 1
+          }
+        ],
+        "title": "Container App replicas and restarts"
+      },
+      "name": "replicas-restarts"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "{0}"
+  ]
+}

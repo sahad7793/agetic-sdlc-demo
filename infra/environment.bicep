@@ -34,6 +34,9 @@ param sqlAdministratorObjectId string
 @description('User principal name of the Entra administrator for Azure SQL.')
 param sqlAdministratorLogin string
 
+@description('Email address that receives observability alert notifications for this environment.')
+param alertEmail string
+
 @description('Tags applied to all environment resources.')
 param tags object = {
   environment: environmentName
@@ -199,9 +202,26 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+module observability 'observability.bicep' = {
+  name: '${containerAppName}-observability'
+  params: {
+    location: location
+    environmentName: environmentName
+    containerAppId: containerApp.id
+    containerAppName: containerApp.name
+    applicationInsightsId: applicationInsights.id
+    healthCheckUrl: 'https://${containerApp.properties.configuration.ingress.fqdn}/health'
+    alertEmail: alertEmail
+    tags: tags
+  }
+}
+
 output containerAppName string = containerApp.name
 output containerAppUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output managedIdentityName string = managedIdentity.name
 output managedIdentityPrincipalId string = managedIdentity.properties.principalId
 output sqlServerName string = sqlServer.name
 output sqlDatabaseName string = sqlDatabase.name
+output actionGroupName string = observability.outputs.actionGroupName
+output applicationInsightsName string = applicationInsights.name
+output logAnalyticsWorkspaceName string = logAnalytics.name

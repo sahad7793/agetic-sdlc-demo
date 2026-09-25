@@ -30,6 +30,44 @@ The following GitHub Environment variables are required for both `staging` and `
 
 The production approval gate is configured in **Settings > Environments > production**. Its required reviewer must remain enabled; do not deploy production directly with Azure CLI because that bypasses the approval audit trail.
 
+## Observability
+
+Application Insights and Log Analytics were provisioned per environment from the start, but until this change nothing consumed the telemetry proactively — no alerts, no action groups, no dashboard. This section closes that gap with additive Bicep resources; no application code, deployment workflow logic, or existing SQL/identity setup was changed except one required wiring fix (below).
+
+### What was added
+
+- **Action groups** (`infra/observability.bicep`, one per environment) — email-based notification targets (`primary-oncall`) that all alert rules below fire into.
+- **HTTP 5xx-rate alert** — fires when the Container App returns more than 5 HTTP 5xx responses within a 5-minute window (`Requests` metric, `statusCodeCategory=5xx`).
+- **p95 latency alert** — fires when p95 request duration exceeds 1500 ms over a 15-minute window. Implemented as a log-based scheduled query rule (KQL over the Application Insights `requests` table) because the Container Apps platform `ResponseTime` metric only supports Average/Total/Maximum/Minimum aggregations, not percentiles.
+- **Restart/replica spike alert** — fires when replicas restart more than 3 times within 15 minutes (`RestartCount` metric), an early indicator of crash-looping.
+- **Availability alert** — a standard Application Insights availability web test hits `/health` every 5 minutes from 5 geographically distributed locations; the paired alert fires if 2 or more locations fail within a 5-minute window.
+- **Cross-environment workbook** (`infra/workbook.bicep` + `infra/workbook-content.json`, deployed once into the shared resource group) — a single Azure Monitor Workbook summarizing request rate/failure rate, p95 latency, SQL dependency health, and replica/restart counts for staging and production side by side.
+
+### Required wiring fix (in scope)
+
+`APPLICATIONINSIGHTS_CONNECTION_STRING` was already set as a Container App environment variable by `infra/environment.bicep`, but no telemetry SDK ever read it, so the API emitted no request or dependency telemetry for the new alerts/workbook to observe. Added the `Azure.Monitor.OpenTelemetry.AspNetCore` NuGet package and a guarded `builder.Services.AddOpenTelemetry().UseAzureMonitor();` call in `Program.cs` (only wired when the connection string is configured, so local/test runs are unaffected). This auto-instruments ASP.NET Core requests and SqlClient dependencies.
+
+### Where to review it
+
+- **Alerts:** Azure Portal → resource group (`rg-taskmanagement-staging-centralus` or `rg-taskmanagement-production-westus2`) → **Alerts**, or **Monitor → Alerts** filtered to the resource group. Each alert rule name is prefixed with the Container App name (e.g. `task-api-stage-8a58968e-5xx-rate`).
+- **Workbook/dashboard:** Azure Portal → `rg-taskmanagement-shared` → the `Microsoft.Insights/workbooks` resource, or **Monitor → Workbooks → Shared reports** in either environment's Application Insights resource.
+- **Action groups:** Azure Portal → resource group → **Monitor → Alerts → Action groups**, named `<container-app-name>-ag`.
+
+### Adding on-call contacts later
+
+Edit the `emailReceivers` (or add `webhookReceivers` / SMS / voice / Teams receivers) in the action group resource inside `infra/observability.bicep`, then redeploy that module standalone against the target resource group, e.g.:
+
+```bash
+az deployment group create \
+  --resource-group rg-taskmanagement-staging-centralus \
+  --template-file infra/observability.bicep \
+  --parameters location=centralus environmentName=staging \
+    containerAppId=<id> containerAppName=<name> applicationInsightsId=<id> \
+    healthCheckUrl=<url> alertEmail=<email>
+```
+
+Do not re-run `infra/environment.bicep` or `infra/shared.bicep` directly against a live environment — those templates default `containerImage` to a placeholder and would reset the running Container App. They exist to keep a from-scratch bootstrap (`scripts/provision-infrastructure.sh`) complete; deploy `observability.bicep`/`workbook.bicep` standalone for updates to already-running environments.
+
 ## Getting started for the repository owner
 
 ### 1. Enable security features
