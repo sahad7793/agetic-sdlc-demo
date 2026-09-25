@@ -39,3 +39,22 @@ Modernize the TaskManagementDemo .NET 8 API for staged Azure Container Apps deli
 - Failed East US 2 and Central US production resources are preserved; new environment-specific resource groups avoid destructive cleanup.
 - Staging has been deployed successfully with `tmapi8a58968e.azurecr.io/taskmanagement-api@sha256:3a44cb0db004be1a73f86e1f8ff7ed09ea6dbc39149d8ca24cce68736d2ff5b4`; `/health` returned `Healthy`.
 - Production infrastructure is provisioned in West US 2. Its application image remains intentionally gated behind the protected GitHub `production` Environment approval and will be deployed by the workflow after CI succeeds on `main`.
+
+## Observability (added)
+
+**Scope:** closed the runtime-observability gap — action groups, metric/log alerts, an availability test, and a cross-environment workbook — with additive-only Bicep deployments against the already-running staging and production Container Apps. No re-application of `environment.bicep`/`shared.bicep` was performed against live resources, because that would reset `containerImage` to its placeholder default (the running image is set out-of-band by the Deploy workflow via `az containerapp update`) and cause an outage.
+
+**In-scope app change:** `APPLICATIONINSIGHTS_CONNECTION_STRING` was already set as a Container App env var by `environment.bicep`, but no telemetry SDK ever read it, so no request/dependency telemetry existed for the new alerts/workbook to observe. Added the `Azure.Monitor.OpenTelemetry.AspNetCore` NuGet package and a guarded `builder.Services.AddOpenTelemetry().UseAzureMonitor();` call in `Program.cs` (only wired when the connection string is present, so local/test runs are unaffected). This is the minimal wiring change described as in-scope in the task.
+
+**New Bicep (extends existing IaC, no parallel path):**
+- `infra/observability.bicep` — per-environment module: Action Group (email receiver), HTTP 5xx-rate metric alert, replica restart-count spike metric alert, p95 latency scheduled query rule (Application Insights `requests` log, since Container Apps platform metrics don't support percentile aggregations), a standard availability webtest against `/health`, and its associated availability metric alert. Wired into `infra/environment.bicep` via a new `observability` module call and a new `alertEmail` param.
+- `infra/workbook.bicep` + `infra/workbook-content.json` — cross-environment Azure Monitor Workbook (request rate/failures, p95 latency, SQL dependency health per environment, replica/restart metrics). Wired into `infra/shared.bicep` via a new `observabilityWorkbook` module call.
+- `scripts/provision-infrastructure.sh` — updated to pass the new params (`alertEmail`, container app names, `workbookLocation`) so a from-scratch bootstrap remains complete/idempotent.
+
+**Deployment proof (additive-only, both environments + shared):**
+- `az deployment group what-if` for `infra/observability.bicep` against both `rg-taskmanagement-staging-centralus` and `rg-taskmanagement-production-westus2`: 6 resource creates, all other resources `ignore` (no modifications to running Container Apps).
+- `az deployment group create` for `infra/observability.bicep` against both resource groups: `provisioningState: Succeeded`.
+- `az deployment group what-if` for `infra/workbook.bicep` against `rg-taskmanagement-shared`: 1 create, 1 ignore.
+- `az deployment group create` for `infra/workbook.bicep` against `rg-taskmanagement-shared`: `provisioningState: Succeeded`.
+- `az resource show` confirmed `provisioningState: Succeeded` for both `Microsoft.Insights/webtests` (staging and production). `Microsoft.Insights/metricAlerts` resources don't return a persistent `provisioningState` via GET (normal Azure Monitor behavior); their existence and `enabled: true` state was confirmed via `az monitor metrics alert show`, and the deployment-level `Succeeded` result is authoritative.
+- `/health` re-confirmed reachable (`200`) on both staging and production after all deployments.
