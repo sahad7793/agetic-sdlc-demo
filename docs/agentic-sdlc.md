@@ -535,3 +535,29 @@ Open the approved issue, assign it to **Copilot**, or use **Open in Copilot**. I
 ### 5. Workflow orchestration
 
 This repository runs two [GitHub Agentic Workflows](https://github.github.com/gh-aw/) (`gh-aw`), configured under `.github/workflows/`: an issue-triage workflow that comments on newly opened issues, and a weekly report workflow that opens a summary issue. Both are advisory only — they cannot self-approve, self-merge, or mutate issues without review. See [agentic-workflows.md](agentic-workflows.md) for what each workflow does and the `COPILOT_GITHUB_TOKEN` repository secret the owner must add before they can run.
+
+### 6. Review governance and ownership routing
+
+[`.github/CODEOWNERS`](../.github/CODEOWNERS) routes review requests for
+ownership-sensitive paths: `infra/` (Bicep), `.github/workflows/` (CI/CD,
+deploy, rollback), the deploy/rollback/access-provisioning scripts, and this
+document plus [agentic-workflows.md](agentic-workflows.md). It deliberately
+does **not** cover `*` — application code, tests, and most other docs have no
+entry, so a code-owner requirement scoped to these higher-risk surfaces can
+never block an unrelated PR.
+
+**This file has no enforcement effect by itself.** GitHub only requires a
+code owner's approval once you turn on **Require review from Code Owners**
+for the "Main Branch Protection" ruleset (**Settings > Rules > Rulesets**).
+This scaffold does not enable that setting; enable it yourself if you want
+GitHub to require `@sahad7793`'s (or a future team's) approval on the listed
+paths in addition to the existing one-approval requirement.
+
+With a single collaborator, CODEOWNERS does not yet redistribute review to a
+different person — all listed paths point to `@sahad7793`, the sole verified
+collaborator today. Its value now is documenting which surfaces are
+higher-risk and giving PR authors an explicit checklist prompt (see the pull
+request template). As real collaborators or teams join, replace individual
+entries in `.github/CODEOWNERS` with the relevant team (e.g.
+`@sahad7793/platform`) instead of adding more usernames ad hoc, and only then
+does turning on code-owner enforcement change who is requested for review.
