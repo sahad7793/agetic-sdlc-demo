@@ -24,7 +24,9 @@ The environments have independent Container Apps environments/apps, user-assigne
 
 ### Operator configuration
 
-The following GitHub Environment variables are required for both `staging` and `production`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, `AZURE_RESOURCE_GROUP`, `ACR_NAME`, `ACR_LOGIN_SERVER`, `CONTAINER_APP_NAME`, and `MANAGED_IDENTITY_ID`. The Entra application registrations have federated credentials constrained to `repo:sahad7793/agetic-sdlc-demo:environment:staging` and `repo:sahad7793/agetic-sdlc-demo:environment:production`; no client secret is used.
+The following GitHub Environment variables are required for both `staging` and `production`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, `AZURE_RESOURCE_GROUP`, `ACR_NAME`, `ACR_LOGIN_SERVER`, `CONTAINER_APP_NAME`, and `MANAGED_IDENTITY_ID`. The Entra application registrations authenticate via OIDC federated credentials; no client secret is used.
+
+> **⚠️ Federated credential subject format:** this account/organization uses GitHub Enterprise Managed Users, so GitHub renders OIDC subject claims with numeric IDs embedded — e.g. `repo:sahad7793@139941502/agetic-sdlc-demo@1383544386:environment:staging`, **not** the plain `repo:sahad7793/agetic-sdlc-demo:environment:staging` format documented in most GitHub OIDC guides. If the app registration or repository is ever recreated, re-check the *actual* subject GitHub presents (visible in the `azure/login` failure message: `AADSTS700213: No matching federated identity record found for presented assertion subject '<actual subject>'`) before configuring the federated credential, rather than assuming the theoretical format.
 
 The production approval gate is configured in **Settings > Environments > production**. Its required reviewer must remain enabled; do not deploy production directly with Azure CLI because that bypasses the approval audit trail.
 
