@@ -58,3 +58,13 @@ Modernize the TaskManagementDemo .NET 8 API for staged Azure Container Apps deli
 - `az deployment group create` for `infra/workbook.bicep` against `rg-taskmanagement-shared`: `provisioningState: Succeeded`.
 - `az resource show` confirmed `provisioningState: Succeeded` for both `Microsoft.Insights/webtests` (staging and production). `Microsoft.Insights/metricAlerts` resources don't return a persistent `provisioningState` via GET (normal Azure Monitor behavior); their existence and `enabled: true` state was confirmed via `az monitor metrics alert show`, and the deployment-level `Succeeded` result is authoritative.
 - `/health` re-confirmed reachable (`200`) on both staging and production after all deployments.
+- Post-merge, generated real traffic against redeployed staging and confirmed via `az monitor app-insights query` that the `requests` table contains real telemetry rows — proving the OpenTelemetry wiring emits data end-to-end, not just compiles.
+- Confirmed the deployed workbook's `serializedData` (only retrievable with the ARM query param `canFetchContent=true`) contains all four real resource IDs substituted, with no leftover `{0}`-`{3}` placeholders.
+
+**End-to-end forced alert-fire test (staging only, 2026-09-25):**
+
+To prove an alert doesn't just deploy but actually fires and auto-resolves, staging's single active Container App revision (`task-api-stage-8a58968e--0000005`) was briefly deactivated via `az containerapp revision deactivate` (no image/config change — `minReplicas`/`maxReplicas` were left at `1`/`3` throughout, since Container Apps requires `maxReplicas >= 1`). This made the ingress return real `404` responses for ~5.5 minutes.
+- `availabilityResults` in Application Insights showed 4 of 5 test locations (Central US, North Central US, West US, West Europe) failing with `'404 - Not Found' does not match the expected status '200 - OK'`, well over the alert's `failedLocationCount >= 2` threshold.
+- Queried `Microsoft.AlertsManagement/alerts` (api-version `2019-05-05-preview`) filtered to `targetResourceGroup=rg-taskmanagement-staging-centralus`: `task-api-stage-8a58968e-health-test-alert` showed `monitorCondition: Fired` (Sev1) at `2026-09-25T05:45:48Z`.
+- The revision was reactivated via `az containerapp revision activate`; `/health` returned `200` again within ~2 minutes, and all 5 availability-test locations passed on the next cycles.
+- Re-querying the Alerts Management API ~11 minutes later showed the same alert transitioned to `monitorCondition: Resolved` at `2026-09-25T05:56:50Z` — a full real `Fired -> Resolved` lifecycle, with no lasting changes to staging's configuration.
