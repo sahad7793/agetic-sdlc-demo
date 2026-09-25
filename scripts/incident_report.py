@@ -72,9 +72,30 @@ def sla_deadline(now, minutes):
     return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def sanitize_title_fragment(value):
+    """Collapse newlines/control chars so a hostile title can't span multiple
+    issue-title lines or otherwise break rendering. Content is still trusted
+    verbatim otherwise (workflow_dispatch already requires repo write access)."""
+    return " ".join(value.split())
+
+
 def build_title(environment, severity, alert_title):
     sev_tag = severity.split(" - ", 1)[0]
-    return f"[INCIDENT][{sev_tag}][{environment}] {alert_title}"
+    return f"[INCIDENT][{sev_tag}][{environment}] {sanitize_title_fragment(alert_title)}"
+
+
+def code_fence(text):
+    """Return a fence of backticks longer than any backtick run already in
+    ``text``, so verbatim alert text can never prematurely close the fence."""
+    longest_run = 0
+    current_run = 0
+    for char in text:
+        if char == "`":
+            current_run += 1
+            longest_run = max(longest_run, current_run)
+        else:
+            current_run = 0
+    return "`" * max(3, longest_run + 1)
 
 
 def build_body(inputs, now, run_url, actor):
@@ -97,9 +118,9 @@ def build_body(inputs, now, run_url, actor):
         "",
         "**Forwarded alert text (verbatim, as submitted):**",
         "",
-        "```",
+        code_fence(inputs["alert_summary"]),
         inputs["alert_summary"],
-        "```",
+        code_fence(inputs["alert_summary"]),
         "",
         "## Response timing targets (policy, not a measurement)",
         "",

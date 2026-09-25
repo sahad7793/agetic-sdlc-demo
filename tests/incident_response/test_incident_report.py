@@ -86,6 +86,26 @@ class TitleTests(unittest.TestCase):
         title = incident_report.build_title("production", "Sev2 - High", "Latency spike")
         self.assertEqual(title, "[INCIDENT][Sev2][production] Latency spike")
 
+    def test_build_title_collapses_newlines_in_alert_title(self):
+        title = incident_report.build_title(
+            "production", "Sev2 - High", "Latency spike\n\n]] on close, then more text"
+        )
+        self.assertNotIn("\n", title)
+        self.assertEqual(
+            title, "[INCIDENT][Sev2][production] Latency spike ]] on close, then more text"
+        )
+
+
+class CodeFenceTests(unittest.TestCase):
+    def test_default_fence_is_three_backticks(self):
+        self.assertEqual(incident_report.code_fence("plain text, no backticks"), "```")
+
+    def test_fence_grows_past_embedded_backtick_runs(self):
+        hostile = "some text\n```\n# this looks like a closed fence\n```\nmore text"
+        fence = incident_report.code_fence(hostile)
+        self.assertEqual(fence, "````")
+        self.assertNotIn(fence, hostile)
+
 
 class BodyTests(unittest.TestCase):
     def test_optional_fields_render_placeholder_when_missing(self):
@@ -102,6 +122,21 @@ class BodyTests(unittest.TestCase):
         self.assertIn("https://logs.example/q", body)
         self.assertIn("https://portal.azure.com/alert/1", body)
         self.assertNotIn(incident_report.NOT_PROVIDED, body)
+
+    def test_alert_summary_with_embedded_fence_does_not_break_out(self):
+        hostile_summary = (
+            "Looks fine\n```\n## Injected heading\nsome forged content\n```\nstill fine"
+        )
+        inputs = base_inputs(alert_summary=hostile_summary)
+        body = incident_report.build_body(inputs, NOW, "https://example.test/run/1", "octocat")
+        # The verbatim text is preserved exactly once...
+        self.assertIn(hostile_summary, body)
+        # ...but is wrapped in a fence long enough that it can't be closed early.
+        fence = incident_report.code_fence(hostile_summary)
+        self.assertEqual(body.count(fence), 2)
+        start = body.index(fence) + len(fence)
+        end = body.index(fence, start)
+        self.assertEqual(body[start + 1 : end].strip("\n"), hostile_summary)
 
     def test_sla_targets_are_computed_from_creation_time_not_measured(self):
         inputs = base_inputs(severity="Sev1 - Critical")
