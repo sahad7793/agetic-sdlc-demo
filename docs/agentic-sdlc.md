@@ -131,6 +131,90 @@ metrics collector intentionally queries only `deploy.yml` for delivery
 reliability/frequency; rollback runs do not change those denominators. No new
 dashboard fields are added by this change.
 
+## Release notes
+
+Use **Actions > Release notes > Run workflow** when you want a truthful,
+human-reviewable draft of what changed, without publishing anything. This is a
+**manual, workflow_dispatch-only** entry point; nothing here runs automatically
+on push, tag, or schedule.
+
+Inputs:
+
+- `tag_name` (required) — the prospective tag/version these notes describe
+  (e.g. `v0.1.0`). **This workflow never creates this tag.**
+- `previous_tag_name` (optional) — an existing tag/ref to start from. Leave
+  blank to cover the full history up to `target_commitish`.
+- `target_commitish` (default `main`) — the branch or commit the prospective
+  tag would point at.
+- `create_draft_release` (default `false`) — when `true`, also saves a
+  **draft** GitHub Release with the generated notes.
+
+### Provenance and no-fabrication guarantee
+
+The notes body comes entirely from GitHub's own
+`POST /repos/{owner}/{repo}/releases/generate-notes` REST API — the same
+engine behind the "Generate release notes" button in the GitHub UI. It
+computes notes purely from **merged pull request metadata** (labels, titles,
+authors) between `previous_tag_name` and `target_commitish`, grouped into
+categories defined in [`.github/release.yml`](../.github/release.yml).
+`scripts/release_notes.py` calls this API and writes the response verbatim to
+a `*.notes.md` file; it does not add, remove, reorder, or summarize any
+content itself. Per GitHub's documentation, this API call has **no side
+effects** — it does not save or create anything on its own.
+
+`.github/release.yml` maps existing repository labels (`enhancement`, `bug`,
+`accessibility`, `documentation`, `dependencies`/`github_actions`/`.NET`,
+`incident`) to changelog sections, and ends with a mandatory catch-all
+category (`labels: ["*"]`) named "Other changes". **Merged PRs with no
+labels, or labels that match nothing above, are never silently dropped** —
+they always appear under "Other changes" instead. `changelog.exclude.labels`
+removes purely administrative labels (`duplicate`, `invalid`, `wontfix`,
+`question`) that would not describe a real change to users.
+
+### Jobs and permissions
+
+Two least-privilege jobs, mirroring the split used by `sdlc-metrics.yml`:
+
+- **`generate`** (`permissions: contents: read`) — always runs. Calls the
+  generate-notes API, writes the notes and an audit JSON to
+  `$GITHUB_STEP_SUMMARY` and a workflow artifact tagged
+  **"DRAFT — nothing published, no tag created"**. This job never touches
+  `contents: write` and cannot create or modify anything in the repository.
+- **`draft-release`** (`permissions: contents: write`) — only runs when
+  `create_draft_release` is `true`. Downloads the artifact from `generate` and
+  saves (or updates, if one already exists for that tag) a **draft** GitHub
+  Release using the generated notes.
+
+**A draft Release with a brand-new tag name does not create a git tag.**
+GitHub only creates the tag at the moment a maintainer opens the draft in the
+UI and explicitly clicks **Publish release**. The `draft` script step also
+re-reads the saved release via `gh release view --json isDraft` and refuses
+to report success unless the result is still a draft — so this workflow
+cannot accidentally publish a release even if `gh` behavior changes upstream.
+
+There is deliberately **no GitHub Environment approval gate** on
+`draft-release` (unlike `rollback.yml`'s production environment): a draft is
+private (visible only to users with push access), fully reversible, and
+triggering `workflow_dispatch` itself already requires write access to this
+repository.
+
+### Limitations
+
+- No git tags or GitHub Releases exist in this repository yet, so there is no
+  automatically-detected "previous release" — `previous_tag_name` must be
+  supplied explicitly (or left blank to summarize the full history).
+- This workflow does not verify that anything it describes was actually
+  deployed, is healthy, or is free of open incidents; it only reflects merged
+  PR metadata.
+- Whether an unauthenticated `contents: read` token is sufficient for the
+  generate-notes API call has not been empirically verified against this
+  repository (GitHub's docs do not state a minimum permission level). If it
+  is insufficient, the `generate` job fails loudly with the API's error
+  message rather than degrading silently.
+- Saving a draft release only records a draft; it never edits an existing
+  **published** release, never deletes releases, and never force-updates a
+  tag.
+
 ## Incident response
 
 Use **Actions > Incident Response > Run workflow** when you receive a

@@ -31,3 +31,8 @@ Review the [SDLC metrics dashboard](https://github.com/sahad7793/agetic-sdlc-dem
 for delivery speed, CI/deployment reliability, and agentic execution outcomes.
 See the [metric definitions and limitations](docs/agentic-sdlc.md#sdlc-metrics-dashboard)
 before comparing periods.
+
+Use **Actions > Release notes > Run workflow** to generate a truthful, human-reviewable
+draft of merged changes without publishing anything; see
+[Release notes](docs/agentic-sdlc.md#release-notes) for provenance, permissions, and
+limitations.

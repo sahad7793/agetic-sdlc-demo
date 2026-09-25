@@ -1,0 +1,41 @@
+# Configuration for GitHub's built-in "automatically generated release notes"
+# feature (the "Generate release notes" button, and the
+# `POST /repos/{owner}/{repo}/releases/generate-notes` API used by
+# `.github/workflows/release-notes.yml`). See:
+# https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+#
+# Every category's `labels` list is matched against a merged pull request's
+# labels. The final `"*"` category is a mandatory catch-all: a pull request
+# that carries none of the labels above (or an unrecognized one) still
+# appears under "Other changes" instead of being silently dropped.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - question
+  categories:
+    - title: Enhancements
+      labels:
+        - enhancement
+    - title: Bug fixes
+      labels:
+        - bug
+    - title: Accessibility
+      labels:
+        - accessibility
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Dependency and tooling updates
+      labels:
+        - dependencies
+        - github_actions
+        - .NET
+    - title: Incident-related fixes
+      labels:
+        - incident
+    - title: Other changes
+      labels:
+        - "*"
