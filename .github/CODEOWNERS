@@ -1,0 +1,34 @@
+# CODEOWNERS routes review requests for ownership-sensitive paths to the
+# repository owner. This file has **no enforcement effect on its own**: GitHub
+# only requires a code owner's approval once the "Main Branch Protection"
+# ruleset's "Require review from Code Owners" setting is turned on
+# (Settings > Rules > Rulesets). See docs/agentic-sdlc.md for details and for
+# why that setting is not toggled by this scaffold.
+#
+# Scope is intentionally narrow: only infra, CI/CD, deploy/rollback/access
+# scripts, and security-relevant docs are listed. Everything else (app code,
+# tests, most docs) has no entry here, so it is never blocked by a
+# code-owner requirement meant for these higher-risk surfaces.
+#
+# All entries currently point to @sahad7793, the sole verified collaborator.
+# As more contributors join, replace individual entries with a team (e.g.
+# @sahad7793/platform) for the relevant area instead of adding more usernames
+# here ad hoc.
+
+# Infrastructure-as-code: Bicep templates provisioning Azure resources
+/infra/ @sahad7793
+
+# CI/CD and repository automation: workflow permissions, CI, deploy, rollback
+/.github/workflows/ @sahad7793
+
+# Deployment, rollback, and access-provisioning scripts
+/scripts/provision-infrastructure.sh @sahad7793
+/scripts/grant-sql-access.sh @sahad7793
+/scripts/rollback.py @sahad7793
+
+# Security- and deployment-relevant documentation
+/docs/agentic-sdlc.md @sahad7793
+/docs/agentic-workflows.md @sahad7793
+
+# This file itself
+/.github/CODEOWNERS @sahad7793
