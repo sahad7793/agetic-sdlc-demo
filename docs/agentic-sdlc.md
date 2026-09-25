@@ -212,7 +212,11 @@ of preview or tests. Prefer **Actions > SDLC Metrics > Run workflow** on `main`
 for publication after merge. Tests use fixtures/fake clients and need no network
 or credential.
 
-The committed baseline is a local read-only observation. The workflow becomes
+The committed baseline is a local read-only observation. The dashboard was
+initially seeded from this snapshot using the explicit publisher and the owner's
+existing GitHub credential; repeating publication preserved exactly one archived
+comment for that window. This does not test the scheduled token's permissions.
+The workflow becomes
 eligible for scheduled/default-branch publication only after a human merges the
 PR. Local API access and a green PR check do not prove that the first scheduled
 `GITHUB_TOKEN` run can read optional alerts; inspect that run's availability notes.
