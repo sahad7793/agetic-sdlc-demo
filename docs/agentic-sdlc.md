@@ -47,6 +47,10 @@ Application Insights and Log Analytics were provisioned per environment from the
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` was already set as a Container App environment variable by `infra/environment.bicep`, but no telemetry SDK ever read it, so the API emitted no request or dependency telemetry for the new alerts/workbook to observe. Added the `Azure.Monitor.OpenTelemetry.AspNetCore` NuGet package and a guarded `builder.Services.AddOpenTelemetry().UseAzureMonitor();` call in `Program.cs` (only wired when the connection string is configured, so local/test runs are unaffected). This auto-instruments ASP.NET Core requests and SqlClient dependencies.
 
+### Validated end-to-end
+
+Beyond confirming the deployments succeeded, the availability alert was proven to actually fire and auto-resolve: staging's Container App revision was briefly deactivated (no image/config change), which made 4 of 5 availability-test locations fail real `/health` checks. The `task-api-stage-8a58968e-health-test-alert` transitioned to `Fired` in the Azure Alerts Management API within minutes, and back to `Resolved` once the revision was reactivated and `/health` started returning `200` again. Live request telemetry (via OpenTelemetry) and the workbook's resource-ID substitution were also verified against the deployed resources, not just the Bicep templates. See `.azure/deployment-plan.md` for full timestamps and query details.
+
 ### Where to review it
 
 - **Alerts:** Azure Portal → resource group (`rg-taskmanagement-staging-centralus` or `rg-taskmanagement-production-westus2`) → **Alerts**, or **Monitor → Alerts** filtered to the resource group. Each alert rule name is prefixed with the Container App name (e.g. `task-api-stage-8a58968e-5xx-rate`).
