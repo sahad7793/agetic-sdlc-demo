@@ -30,6 +30,9 @@ jobs:
       - name: Test release-notes contracts
         run: python3 -m unittest discover -s tests/release_notes
 
+      - name: Test performance-gate contracts
+        run: python3 -m unittest discover -s tests/perf_gate
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:

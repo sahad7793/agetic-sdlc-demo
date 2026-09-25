@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "status": "unset",
+  "notes": "Bootstrap placeholder. No numbers here are real measurements or invented SLOs. perf_gate.py treats status=unset as report-only (always exits 0) and never compares against the empty scenario data below. A maintainer must review a few real advisory runs of .github/workflows/performance.yml on ubuntu-latest, then run `python3 scripts/perf_gate.py capture-baseline --from <a reviewed perf-results/summary.json> --out tests/performance/baseline.json` to replace this file with a real, reviewed baseline in a follow-up PR. See docs/agentic-sdlc.md for the full lifecycle.",
+  "captured_at": null,
+  "git_sha": null,
+  "captured_by": null,
+  "runner": null,
+  "tolerance": {
+    "p95_latency_ms_multiplier": 1.5,
+    "p99_latency_ms_multiplier": 1.75,
+    "error_rate_max": 0.0,
+    "throughput_min_multiplier": 0.7
+  },
+  "scenarios": {}
+}

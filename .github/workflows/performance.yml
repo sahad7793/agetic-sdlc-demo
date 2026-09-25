@@ -1,0 +1,167 @@
+name: Performance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/TaskManagement.Api/**"
+      - "tests/performance/**"
+      - "scripts/perf_gate.py"
+      - ".github/workflows/performance.yml"
+  workflow_dispatch:
+    inputs:
+      run_staging_smoke:
+        description: "Also run the read-only staging smoke load test (requires confirm=yes)"
+        type: boolean
+        default: false
+      confirm:
+        description: "Type 'yes' to confirm the staging smoke run (ignored unless run_staging_smoke is true)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  local-load-test:
+    name: Local ephemeral load test (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PERF_TEST_BASE_URL: http://localhost:5087
+      ASPNETCORE_URLS: http://localhost:5087
+      ASPNETCORE_ENVIRONMENT: Development
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: "0.54.0"
+
+      - name: Restore and build
+        run: |
+          dotnet restore TaskManagementDemo.sln
+          dotnet build TaskManagementDemo.sln --configuration Release --no-restore
+
+      - name: Start API in the background
+        env:
+          ConnectionStrings__TaskManagement: "Data Source=${{ runner.temp }}/perf-task-management.db"
+        run: |
+          nohup dotnet run --project src/TaskManagement.Api/TaskManagement.Api.csproj \
+            --configuration Release --no-build --no-launch-profile > "$RUNNER_TEMP/api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/api.pid"
+
+      - name: Wait for /health
+        run: |
+          for _ in {1..30}; do
+            if curl --fail --silent --show-error "$PERF_TEST_BASE_URL/health"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become healthy in time" >&2
+          cat "$RUNNER_TEMP/api.log" || true
+          exit 1
+
+      - name: Run k6 load test
+        run: |
+          mkdir -p perf-results
+          k6 run tests/performance/task-api-load.js
+
+      - name: Stop API
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/api.pid")" 2>/dev/null || true
+
+      - name: Compare against baseline (advisory, never fails the job)
+        if: always()
+        run: |
+          if [ -f perf-results/summary.json ]; then
+            python3 scripts/perf_gate.py compare --mode advisory
+          else
+            echo "No perf-results/summary.json produced; k6 run likely failed before completion." >&2
+          fi
+
+      - name: Publish gate report to job summary
+        if: always()
+        run: |
+          if [ -f perf-results/gate-report.md ]; then
+            cat perf-results/gate-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-results
+          path: |
+            perf-results/
+            ${{ runner.temp }}/api.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  staging-smoke-load:
+    name: Staging read-only smoke load (manual, opt-in)
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_staging_smoke == true &&
+      inputs.confirm == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    concurrency:
+      group: containerapp-staging-perf-smoke
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: "0.54.0"
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve staging FQDN
+        id: fqdn
+        run: |
+          fqdn=$(az containerapp show --name "${{ vars.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn --output tsv)
+          echo "url=https://$fqdn" >> "$GITHUB_OUTPUT"
+
+      - name: Run tiny read-only smoke against staging
+        env:
+          PERF_TEST_BASE_URL: ${{ steps.fqdn.outputs.url }}
+          PERF_TEST_READS_ONLY: "true"
+          PERF_TEST_VUS: "2"
+          PERF_TEST_ITERATIONS_PER_VU: "5"
+        run: |
+          mkdir -p perf-results
+          k6 run tests/performance/task-api-load.js
+
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-results-staging-smoke
+          path: perf-results/
+          if-no-files-found: warn
+          retention-days: 14

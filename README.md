@@ -18,6 +18,14 @@ The API persists local development data to `task-management.db`. In the Developm
 dotnet test TaskManagementDemo.sln
 ```
 
+## Performance smoke test
+
+A non-destructive [k6](https://k6.io) load test runs the API locally in CI on
+pull requests touching `src/TaskManagement.Api` or `tests/performance`, and
+reports (advisory-only) against an explicit, human-reviewed baseline via
+`scripts/perf_gate.py`. See [docs/agentic-sdlc.md#performance-and-load-testing-gate](docs/agentic-sdlc.md#performance-and-load-testing-gate)
+for the design, baseline lifecycle, and the manual, opt-in staging smoke mode.
+
 ## Architecture
 
 - **Controllers** expose HTTP endpoints and map service results to HTTP responses.
