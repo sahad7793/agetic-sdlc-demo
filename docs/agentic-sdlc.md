@@ -131,6 +131,89 @@ metrics collector intentionally queries only `deploy.yml` for delivery
 reliability/frequency; rollback runs do not change those denominators. No new
 dashboard fields are added by this change.
 
+## Incident response
+
+Use **Actions > Incident Response > Run workflow** when you receive a
+production/staging alert — from an Azure Monitor action-group email, the
+Portal, a health check, or a customer report — and want a structured,
+ownable GitHub record of it. This is a **human-initiated** entry point: an
+operator who received a forwarded alert pastes its details into the dispatch
+form. There is no webhook receiver, no `repository_dispatch`, and no new
+Azure resource; adding one was explicitly out of scope for this change.
+
+`scripts/incident_report.py` builds the issue deterministically — every field
+in the resulting issue is either the operator's verbatim input, a static
+per-severity SLA target, or a static link to existing docs/workflows. It does
+**not** call an LLM, does **not** query Application Insights or any other
+telemetry source, and does **not** invent a correlation ID, log query, or
+timeline entry that wasn't supplied. If an optional field (correlation ID, log
+query link, Azure Portal alert link) is left blank, the issue says so
+explicitly rather than fabricating a plausible-looking value.
+
+The workflow's job permissions are `contents: read` (to check out the script)
+and `issues: write` only — no Azure OIDC, `id-token`, or new secret is used or
+required, because filing an incident never touches Azure. It only ever
+creates one GitHub issue, labeled `incident` and a per-severity label
+(`sev1`–`sev4`, created on first use if missing), and assigns it to the
+triggering operator as the initial primary responder.
+
+**This workflow never automatically remediates anything.** It does not
+dispatch Rollback, does not call any Azure API, and does not close or merge
+anything. Its triage checklist explicitly tells the responder to use the
+existing **Rollback** workflow themselves, with a `reason` referencing the
+incident issue, if they decide a rollback is warranted — preserving the same
+production approval gate described above.
+
+### Dispatch inputs
+
+| Input | Required | Purpose |
+| --- | --- | --- |
+| `environment` | Yes | `staging`, `production`, or `shared` — which environment the alert concerns. |
+| `severity` | Yes | `Sev1 - Critical` through `Sev4 - Low`; drives the static SLA targets below. |
+| `alert_source` | Yes | Where the alert came from (Azure Monitor alert, availability/health check, manual observation, customer report, other). |
+| `alert_title` | Yes | Short title, becomes part of the issue title. |
+| `alert_summary` | Yes | The forwarded alert text or a description of what was observed; included verbatim in a fenced code block. |
+| `correlation_id` | No | Application Insights `operation_Id` / trace ID, if known. |
+| `log_query_link` | No | A deep link to a Log Analytics / Application Insights query. |
+| `azure_alert_link` | No | A link to the Azure Portal alert instance. |
+
+### Response timing targets
+
+These are static SLA policy targets computed from the issue's creation time,
+not a measurement of anything — the issue body says so explicitly:
+
+| Severity | Acknowledge by | Mitigate by |
+| --- | --- | --- |
+| Sev1 - Critical | +15 minutes | +60 minutes |
+| Sev2 - High | +30 minutes | +240 minutes |
+| Sev3 - Moderate | +120 minutes | +480 minutes |
+| Sev4 - Low | +480 minutes | +2880 minutes |
+
+### Operating procedure
+
+1. When you receive/observe an alert, dispatch **Incident Response** with the
+   details you have. You do not need every optional field — leave unknown
+   ones blank; the issue will say so rather than guessing.
+2. The created issue is your incident record. Follow its triage checklist:
+   confirm scope, correlate with the observability workbook/App Insights
+   using the links you provided, check recent Deploy history, and decide
+   whether to roll back.
+3. If you roll back, dispatch **Rollback** yourself (see above), referencing
+   the incident issue number in its `reason` input. Incident Response never
+   does this for you.
+4. Update the incident issue with your timeline and resolution as you work.
+   Close it with a short postmortem note for Sev1/Sev2 once resolved.
+
+### Limits
+
+This is a lightweight GitHub-native record, not a paging/on-call product: it
+does not page anyone, does not integrate with PagerDuty/Opsgenie, and does not
+read alert state from Azure. "Filed" is not the same as "acknowledged in
+production" — the assignee and checklist are the auditable record of who is
+responding and when, based on what the operator reports. Treat the SLA table
+as policy, and the alert-context fields as exactly what was typed in — verify
+independently before acting on them for anything safety-critical.
+
 ## Observability
 
 Application Insights and Log Analytics were provisioned per environment from the start, but until this change nothing consumed the telemetry proactively — no alerts, no action groups, no dashboard. This section closes that gap with additive Bicep resources; no application code, deployment workflow logic, or existing SQL/identity setup was changed except one required wiring fix (below).

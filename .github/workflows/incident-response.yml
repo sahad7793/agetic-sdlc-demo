@@ -1,0 +1,82 @@
+name: Incident Response
+run-name: Incident (${{ inputs.severity }}, ${{ inputs.environment }}) by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Affected environment
+        type: choice
+        options: [staging, production, shared]
+        required: true
+      severity:
+        description: Severity
+        type: choice
+        options: ["Sev1 - Critical", "Sev2 - High", "Sev3 - Moderate", "Sev4 - Low"]
+        required: true
+      alert_source:
+        description: Where did this alert come from?
+        type: choice
+        options:
+          - Azure Monitor alert (forwarded)
+          - Availability/health check
+          - Manual observation
+          - Customer report
+          - Other
+        required: true
+      alert_title:
+        description: Short alert/incident title
+        type: string
+        required: true
+      alert_summary:
+        description: Forwarded alert text or description of what you observed
+        type: string
+        required: true
+      correlation_id:
+        description: "Optional: Application Insights operation_Id / trace ID"
+        type: string
+        required: false
+      log_query_link:
+        description: "Optional: link to a Log Analytics / App Insights query"
+        type: string
+        required: false
+      azure_alert_link:
+        description: "Optional: link to the Azure Portal alert instance"
+        type: string
+        required: false
+
+permissions: {}
+
+jobs:
+  create-incident:
+    name: Create incident issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ACTOR: ${{ github.actor }}
+      INPUT_ENVIRONMENT: ${{ inputs.environment }}
+      INPUT_SEVERITY: ${{ inputs.severity }}
+      INPUT_ALERT_SOURCE: ${{ inputs.alert_source }}
+      INPUT_ALERT_TITLE: ${{ inputs.alert_title }}
+      INPUT_ALERT_SUMMARY: ${{ inputs.alert_summary }}
+      INPUT_CORRELATION_ID: ${{ inputs.correlation_id }}
+      INPUT_LOG_QUERY_LINK: ${{ inputs.log_query_link }}
+      INPUT_AZURE_ALERT_LINK: ${{ inputs.azure_alert_link }}
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build and file incident issue
+        run: python3 scripts/incident_report.py run "$RUNNER_TEMP/incident-audit.json"
+
+      - name: Publish incident audit
+        if: always()
+        run: python3 scripts/incident_report.py summary "$RUNNER_TEMP/incident-audit.json"

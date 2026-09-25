@@ -24,6 +24,9 @@ jobs:
       - name: Test rollback contracts
         run: python3 -m unittest discover -s tests/rollback
 
+      - name: Test incident-response contracts
+        run: python3 -m unittest discover -s tests/incident_response
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
