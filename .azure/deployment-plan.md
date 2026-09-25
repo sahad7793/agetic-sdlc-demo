@@ -78,3 +78,43 @@ To prove an alert doesn't just deploy but actually fires and auto-resolves, stag
 - Cleaned up: removed the temporary `proof-webhook` webhook receiver from staging's action group, and restored `useCommonAlertSchema: true` on the email receiver (it had reset to `false` during the remove/re-add cycle) to match `infra/observability.bicep`. Re-confirmed email delivery still succeeds after this cleanup.
 - Tested **production**'s action group (`task-api-prod-west-8a58968e-ag`, same email address) without any additional verification step: `Status: Succeeded` — confirming Microsoft's documented behavior that OTP verification for an email address persists tenant-wide across all current and future action groups, not just the one where it was verified.
 - No Bicep changes were required — the fix was purely a one-time, out-of-band Portal action inherent to the Azure platform. See `docs/agentic-sdlc.md` → Observability → "Adding on-call contacts later" for guidance to future maintainers adding new email receivers.
+
+## Image rollback workflow (added)
+
+**Scope:** additive, manual image-only recovery via `.github/workflows/rollback.yml`
+and `scripts/rollback.py`. No live rollback, Bicep re-application, Azure resource,
+database, secret, role, or federated-credential change is part of this work.
+
+- Select staging/production and either the previous successful deployment or an
+  explicit digest/evidence-backed tag; require an operator reason.
+- Reuse existing environment-scoped OIDC variables and `azure/login@v2`.
+  Production retains its required environment approval. Preserve the actual
+  numeric-ID federated subjects documented in `docs/agentic-sdlc.md`; do not
+  replace them with theoretical repository-name-only subjects.
+- Resolve exact image digests from retained Deploy job logs and per-attempt,
+  per-environment job results, not workflow/source SHAs or whole-run success.
+  Missing/ambiguous evidence fails closed; explicit digest input remains available.
+  Tag resolution uses recorded build evidence, not new ACR permissions.
+- Serialize updates with matching Deploy/Rollback concurrency groups. Recheck
+  desired/ready image state before mutation; verify the requested digest is the
+  ready serving revision and poll `/health` after update for approximately two
+  minutes. Record actor, reason, from/to images, provenance, and outcome in the
+  Actions step summary, including failures. Never automatically perform another
+  rollback when verification fails.
+- Retain the metrics collector's exact Deploy workflow allowlist. Rollback is
+  identifiable recovery activity, excluded from normal deployment metrics.
+- Document database compatibility, image/log retention, concurrency limitations,
+  and the fact that a successful job/health probe is not business-level assurance
+  in `docs/agentic-sdlc.md` under `Rollback`.
+
+**Validation approach:** actionlint for changed workflows; focused Python rollback
+contracts (mocked Azure mutations/health probes), existing metrics tests with a
+rollback-exclusion regression, and read-only resolution against retained GitHub
+Deploy history. Live staging/production recovery requires a separate dispatch and
+the usual production approval; local validation does not claim a live rehearsal.
+
+**Validation proof:** actionlint 1.7.12 passed for Deploy, Rollback, CI, and SDLC
+Metrics workflows. All 29 rollback tests and 27 metrics tests passed. Read-only
+GitHub history checks resolved the preceding deployment for both environments
+(run `36103502584` before `36111367800`) and resolved the latter build's tag to
+its logged immutable digest. No Azure mutation or live rollback was executed.

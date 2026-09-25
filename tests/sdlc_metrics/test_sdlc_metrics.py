@@ -344,6 +344,26 @@ class ApiTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unmapped"):
                 metrics.collect(RunApi(), REPOSITORY, END, "abc")
 
+    def test_rollback_workflow_is_not_queried_or_counted_as_delivery(self):
+        endpoints = []
+
+        class RunApi:
+            def request(self, endpoint):
+                return {"created_at": START}, {}
+
+            def pages(self, endpoint, key=None):
+                endpoints.append(endpoint)
+                if endpoint.endswith("rollback.yml/runs"):
+                    return [{"id": 999, "run_attempt": 1}]
+                return []
+
+        with patch.object(metrics, "collect_prs", return_value=[]):
+            result = metrics.collect(RunApi(), REPOSITORY, END, "abc")
+        self.assertTrue(any(endpoint.endswith("deploy.yml/runs") for endpoint in endpoints))
+        self.assertFalse(any("rollback.yml" in endpoint for endpoint in endpoints))
+        self.assertEqual(result["deployment_jobs"], [])
+        self.assertEqual(result["attempts"], [])
+
 
 class PublicationApi:
     def __init__(self):
