@@ -118,3 +118,59 @@ Metrics workflows. All 29 rollback tests and 27 metrics tests passed. Read-only
 GitHub history checks resolved the preceding deployment for both environments
 (run `36103502584` before `36111367800`) and resolved the latter build's tag to
 its logged immutable digest. No Azure mutation or live rollback was executed.
+
+## Incident response workflow (added)
+
+**Scope:** additive, deterministic on-call/incident-response entry point via
+`.github/workflows/incident-response.yml` and `scripts/incident_report.py`. No
+Azure resource, secret, role, alert rule, or webhook was added or changed. The
+existing Application Insights/Azure Monitor alerting from the Observability
+work above remains the only source of alert *detection*; this workflow only
+structures the human response to an alert a person has already seen (in email,
+Teams/Slack, or the Portal) into an auditable GitHub Incident issue.
+
+- `workflow_dispatch`-only trigger (`environment`, `severity`, `alert_source`,
+  `alert_title`, `alert_summary`, optional `correlation_id`/`log_query_link`/
+  `azure_alert_link` inputs). No inbound webhook, no Azure Monitor action-group
+  integration, and no polling of Azure — a human or an external forwarder
+  (Portal "Logic App"/email-to-GitHub-issue bridge, out of scope here) supplies
+  the alert context by running the workflow.
+- `permissions: {}` at workflow root; the single job requests only
+  `contents: read` (checkout) and `issues: write` (create the incident issue
+  and idempotently ensure `incident`/`sev1`-`sev4` labels exist). No
+  `id-token`, `actions: read`, or Azure OIDC variables are used — this
+  workflow cannot authenticate to Azure and cannot mutate any Azure resource.
+- `scripts/incident_report.py` is deterministic (no LLM/`engine: copilot`,
+  matching `scripts/rollback.py`'s pattern): it renders the supplied inputs
+  verbatim into a structured issue body (Summary, alert context, response
+  timing targets computed from the issue-creation time and a fixed
+  severity-to-minutes table, ownership/assignee, a triage checklist, runbook
+  links to `docs/agentic-sdlc.md#rollback`/`#observability`/
+  `#incident-response`, and a provenance footer with actor/run URL/timestamp)
+  and never invents telemetry, root cause, or a remediation action. The
+  workflow only ever creates a `gh issue create`; it never closes, merges, or
+  edits any other issue/PR and performs no auto-remediation.
+- Every run writes an incremental JSON audit record (`incident-audit.json`,
+  uploaded as a workflow artifact) so a failed `gh issue create` call is still
+  auditable, then emits a `$GITHUB_STEP_SUMMARY` with the created issue link
+  or the failure reason.
+- Documented the trigger model, permissions, inputs, SLA table, and operating
+  procedure in `docs/agentic-sdlc.md` under a new `Incident response` section,
+  and wired `tests/incident_response` into `.github/workflows/ci.yml` next to
+  the existing rollback/metrics contract tests.
+
+**Validation approach:** actionlint for the changed/added workflows; focused
+Python contract tests (input validation, title/body construction, SLA-minutes
+computation, label idempotency, and `perform()`'s success/failure paths with
+mocked `gh` calls — no real GitHub or Azure calls in tests). No Azure
+deployment, resource, or credential is touched by this feature, so no `what-if`
+or `az` validation applies.
+
+**Validation proof:** actionlint 1.7.12 passed for `incident-response.yml` with
+no findings (an initial `multiline: true` input attribute was removed after
+actionlint flagged it as an unsupported `workflow_dispatch` input key). All 17
+new incident-response tests passed, alongside the existing 29 rollback and 27
+metrics tests (73 total, all green). No Azure resource, secret, or role was
+created, changed, or queried; no live incident issue has been dispatched from
+this branch yet (see PR description for whether a demo dispatch was run before
+merge).
