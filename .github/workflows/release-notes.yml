@@ -1,0 +1,103 @@
+name: Release notes
+run-name: Release notes ${{ inputs.tag_name }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Prospective tag/version for these draft notes (e.g. v0.1.0). Never created by this workflow.
+        type: string
+        required: true
+      previous_tag_name:
+        description: "Existing tag or ref to start from (leave empty to cover the full history up to target_commitish)"
+        type: string
+        required: false
+      target_commitish:
+        description: Branch or commit SHA the prospective tag would point at
+        type: string
+        default: main
+        required: true
+      create_draft_release:
+        description: Also save a draft GitHub Release with these notes (still requires a human "Publish release" to go live)
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: release-notes-${{ inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate draft release notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ACTOR: ${{ github.actor }}
+      INPUT_TAG_NAME: ${{ inputs.tag_name }}
+      INPUT_PREVIOUS_TAG_NAME: ${{ inputs.previous_tag_name }}
+      INPUT_TARGET_COMMITISH: ${{ inputs.target_commitish }}
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check release-notes contracts
+        run: python3 -m unittest discover -s tests/release_notes
+
+      - name: Generate release notes from GitHub's own generate-notes API
+        run: python3 scripts/release_notes.py generate "$RUNNER_TEMP/release-notes-audit.json"
+
+      - name: Publish generation summary
+        if: always()
+        run: python3 scripts/release_notes.py summary "$RUNNER_TEMP/release-notes-audit.json"
+
+      - name: Retain audit and generated notes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/release-notes-audit.json
+            ${{ runner.temp }}/release-notes-audit.notes.md
+          retention-days: 90
+          if-no-files-found: error
+
+  draft-release:
+    name: Save draft GitHub Release
+    needs: generate
+    if: ${{ inputs.create_draft_release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download generated notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes-${{ github.run_id }}
+          path: ${{ runner.temp }}
+
+      - name: Save or update the draft release
+        run: python3 scripts/release_notes.py draft "$RUNNER_TEMP/release-notes-audit.json"
+
+      - name: Publish draft-release summary
+        if: always()
+        run: python3 scripts/release_notes.py draft-summary "$RUNNER_TEMP/release-notes-audit.json"

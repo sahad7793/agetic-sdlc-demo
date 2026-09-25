@@ -27,6 +27,9 @@ jobs:
       - name: Test incident-response contracts
         run: python3 -m unittest discover -s tests/incident_response
 
+      - name: Test release-notes contracts
+        run: python3 -m unittest discover -s tests/release_notes
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
