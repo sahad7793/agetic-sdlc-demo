@@ -37,10 +37,24 @@ param sqlAdministratorLogin string
 @description('Email address that receives observability alert notifications for this environment.')
 param alertEmail string
 
-@description('Tags applied to all environment resources.')
+@description('Cost-allocation tag identifying the owning cost center/GL code for this environment. No default: the operator must supply the organization\'s actual value.')
+param costCenter string
+
+@description('Cost-allocation tag identifying the owning team or individual accountable for this environment\'s spend. No default: the operator must supply the organization\'s actual value.')
+param owner string
+
+@description('Free-form tags applied to all environment resources, in addition to the required cost-allocation tags below.')
 param tags object = {
   environment: environmentName
 }
+
+// Cost-governance allocation tags (costCenter/owner) are enforced here so every
+// environment resource always carries them, regardless of what the caller's
+// free-form `tags` parameter contains. See docs/agentic-sdlc.md > Cost governance.
+var resourceTags = union(tags, {
+  costCenter: costCenter
+  owner: owner
+})
 
 var workspaceName = '${containerAppName}-logs'
 var applicationInsightsName = '${containerAppName}-appi'
@@ -48,13 +62,13 @@ var applicationInsightsName = '${containerAppName}-appi'
 resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: managedIdentityName
   location: location
-  tags: tags
+  tags: resourceTags
 }
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: workspaceName
   location: location
-  tags: tags
+  tags: resourceTags
   properties: {
     sku: {
       name: 'PerGB2018'
@@ -67,7 +81,7 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: applicationInsightsName
   location: location
   kind: 'web'
-  tags: tags
+  tags: resourceTags
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: logAnalytics.id
@@ -77,7 +91,7 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: containerAppsEnvironmentName
   location: location
-  tags: tags
+  tags: resourceTags
   properties: {
     appLogsConfiguration: {
       destination: 'log-analytics'
@@ -92,7 +106,7 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01'
 resource sqlServer 'Microsoft.Sql/servers@2022-05-01-preview' = {
   name: sqlServerName
   location: location
-  tags: tags
+  tags: resourceTags
   properties: {
     administrators: {
       administratorType: 'ActiveDirectory'
@@ -111,7 +125,7 @@ resource sqlDatabase 'Microsoft.Sql/servers/databases@2022-05-01-preview' = {
   parent: sqlServer
   name: sqlDatabaseName
   location: location
-  tags: tags
+  tags: resourceTags
   sku: {
     name: 'GP_S_Gen5'
     tier: 'GeneralPurpose'
@@ -137,7 +151,7 @@ resource allowAzureServices 'Microsoft.Sql/servers/firewallRules@2022-05-01-prev
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: containerAppName
   location: location
-  tags: tags
+  tags: resourceTags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -212,7 +226,7 @@ module observability 'observability.bicep' = {
     applicationInsightsId: applicationInsights.id
     healthCheckUrl: 'https://${containerApp.properties.configuration.ingress.fqdn}/health'
     alertEmail: alertEmail
-    tags: tags
+    tags: resourceTags
   }
 }
 

@@ -1,0 +1,51 @@
+name: Cost Governance Report
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cost-governance-report
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cost-governance
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check report contracts
+        run: python3 -m unittest discover -s tests/cost_governance
+
+      - name: Sign in to Azure with OIDC (Reader role only)
+        # This credential is intentionally granted the built-in Reader role
+        # only, not Cost Management Reader, so it cannot call Cost Management
+        # billing APIs at all. See docs/agentic-sdlc.md > Cost governance.
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Collect read-only, non-monetary governance evidence
+        run: python3 scripts/cost_governance_report.py collect --output governance-output
+
+      - name: Publish step summary
+        run: cat governance-output/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain dated report and evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: cost-governance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: governance-output/
+          retention-days: 90
+          if-no-files-found: error
