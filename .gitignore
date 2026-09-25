@@ -14,6 +14,7 @@
 .idea/
 
 # Test and coverage results
+__pycache__/
 TestResults/
 coverage/
 *.coverage

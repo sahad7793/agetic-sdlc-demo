@@ -26,3 +26,8 @@ dotnet test TaskManagementDemo.sln
 - **DTOs** define the API contract and validation boundary so EF entities are never returned directly.
 
 Read [docs/agentic-sdlc.md](docs/agentic-sdlc.md) for the complete issue-to-merge workflow and the repository settings the owner must enable.
+
+Review the [SDLC metrics dashboard](https://github.com/sahad7793/agetic-sdlc-demo/issues/28)
+for delivery speed, CI/deployment reliability, and agentic execution outcomes.
+See the [metric definitions and limitations](docs/agentic-sdlc.md#sdlc-metrics-dashboard)
+before comparing periods.

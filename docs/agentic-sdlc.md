@@ -76,6 +76,158 @@ az deployment group create \
 
 Do not re-run `infra/environment.bicep` or `infra/shared.bicep` directly against a live environment — those templates default `containerImage` to a placeholder and would reset the running Container App. They exist to keep a from-scratch bootstrap (`scripts/provision-infrastructure.sh`) complete; deploy `observability.bicep`/`workbook.bicep` standalone for updates to already-running environments.
 
+## SDLC metrics dashboard
+
+The [SDLC metrics dashboard](https://github.com/sahad7793/agetic-sdlc-demo/issues/28)
+is the single reporting issue. Its body shows the latest observation; dated comments
+preserve the original snapshot for each reporting window. The **SDLC Metrics**
+workflow (`.github/workflows/sdlc-metrics.yml`) runs Mondays at 08:30 UTC or on
+manual dispatch from the default branch. GitHub may delay scheduled runs.
+
+This deterministic Python/GitHub Actions report complements the narrative gh-aw
+weekly repository report; it does not use an LLM to calculate numbers or require
+a Copilot token, Azure credentials, external dashboard, Pages setup, or custom PAT.
+It changes neither application code nor deployment gates.
+
+### Reporting windows and baseline
+
+The current window is the last **seven complete UTC days**, ending at midnight
+on the collection date. The previous window is the immediately preceding seven
+days. Both are half-open `[start, end)`: an event at the end belongs to the next
+period. Manual runs use the same rule, not a rolling 168 hours ending at dispatch.
+Reports record repository creation, collection start/end, collector commit, schema
+version, observed hours, sample counts, and explicit source availability.
+
+The repository was created on September 23, 2026. The initial
+[baseline report](metrics/baseline.md) and [structured snapshot](metrics/baseline.json)
+therefore cover only the available early history, not a pre-agentic control period.
+The separate initial-baseline section includes activity up to collection start,
+including the current partial day. Weekly comparisons still exclude that day.
+Periods preceding repository creation are displayed as unavailable comparisons,
+not evidence of zero productivity. Per-day deployment rates are withheld for partial
+periods and the initial baseline. Empty duration samples and zero-denominator rates
+are `N/A`, never a fabricated zero-hour duration or 100% reliability.
+
+### Metric dictionary
+
+| Metric | Population, numerator, denominator | Exclusions and limits |
+| --- | --- | --- |
+| PR cycle time | Main-target PRs merged within the window; median elapsed hours from PR creation to merge, with sample count. | Includes draft/review waiting. Excludes unmerged PRs, other target branches, and negative durations. Author cohorts show Dependabot, explicitly named Copilot agent accounts, and other/unknown; the latter does not mean human-only. |
+| Issue-to-merge lead time | Explicit same-repository `closingIssuesReferences`; one sample per issue at its earliest linked main merge, assigned to that merge's window; median hours from issue creation. | No prose parsing, chronological guesses, or external issue references. A linked PR is not evidence that every requirement was delivered. Negative durations are excluded and counted. |
+| Issue-link coverage | Main PRs merged in the window with at least one valid same-repository closing link / all main PRs merged in the window. | Denominator includes bots and unlinked work. Also show unique issue sample count; PR coverage and issue sample size are different quantities. |
+| Issue-to-deployment lead time | **Unavailable until trustworthy deployed-source evidence is recorded.** | The deployment workflow checks out the triggering CI SHA. Automatic environment deployment SHA and outer `workflow_run.head_sha` do not independently identify the image source under concurrent pushes. No guessed issue-to-deployment timings are reported, and no production change is made to populate this metric. |
+| CI reliability | Every attempt of `ci.yml` whose `run_started_at` is in the window: successful attempts / decisive attempts. Decisive means `success`, `failure`, `timed_out`, `startup_failure`, or `action_required`. | Reruns count independently, preserving failed attempts. Counts for cancellations, skipped, neutral, stale, pending, and unknown are separate and excluded from the ratio. `action_required` can reflect authorization rather than a code defect. PR-triggered CI, main pushes, and other triggers are also separated. |
+| Staging/production delivery reliability | Unique deployment job IDs from **all** `deploy.yml` attempts, grouped by environment and job start time; same decisive-outcome denominator as CI. | Staging includes build/publish failures. Skipped production is not failure; approval-waiting jobs are pending. Reused jobs across reruns count once. Job names are explicitly mapped; an unmapped name fails collection instead of dropping data. |
+| Deployment frequency | Count of unique successful delivery jobs completed in the window, separately for staging and production; divide by seven calendar days only for complete periods. | Repeated real delivery jobs count; reused jobs do not. This counts pipeline delivery operations, not distinct releases, image digests, or deployment-status updates. Production job success is not a runtime health guarantee. |
+| Agentic execution outcomes | Exact `issue-triage.lock.yml` and `weekly-repo-report.lock.yml` attempt outcomes and rerun counts, with the same start-time cohorts and reliability denominator as CI. | Successful execution does not prove useful advice, a published output, accepted recommendations, or subsequent delivery. Generic bot comments/issues are not attributed without explicit workflow provenance. |
+| Dependabot PR activity | PRs authored by the known Dependabot account opened in each window; main-target PRs merged in each window; open PR inventory at collection. | Includes security and version updates; do not infer security fixes from ordinary dependency PRs. Closed-unmerged PRs do not count as merged. |
+| CodeQL / Dependabot alerts | If accessible: current counts by state and counts whose available `created_at`, `fixed_at`, or `dismissed_at` timestamps fall in the window. Code-scanning results are filtered to the CodeQL tool on `main`. | Inventory is current, not period-end backlog. Reopenings and overwritten transitions cannot be reconstructed from this API response. Dependabot auto-dismissals appear in inventory but are not counted as manual dismissal events. No raw vulnerability details are published. |
+
+Reliability outcomes are observed **during collection**, even for prior-period
+start-time cohorts. For example, an attempt started yesterday but completed today
+can contribute yesterday's cohort with today's observed result. This is not a
+historical end-of-day success rate; recollection may revise a cohort. Frequency
+instead uses completion timestamps. Current unfinished deployment jobs, including
+approval waiting, are explicitly a separate inventory.
+
+### Data sources, access, and trustworthy failures
+
+`scripts/sdlc_metrics.py` uses these supported APIs:
+
+- [GraphQL pull requests](https://docs.github.com/en/graphql/reference/objects#pullrequest),
+  including `closingIssuesReferences`, creation/merge timestamps, base branch,
+  and author login; outer and nested connections are paginated.
+- [REST workflow runs and attempts](https://docs.github.com/en/rest/actions/workflow-runs)
+  resolved by exact workflow file path, and
+  [attempt-specific jobs](https://docs.github.com/en/rest/actions/workflow-jobs).
+  Delivery jobs are sufficient to measure the actual pipeline operations; automatic
+  deployment status/SHA records are deliberately not used as image provenance.
+- [Code-scanning alerts](https://docs.github.com/en/rest/code-scanning/code-scanning)
+  and [Dependabot alerts](https://docs.github.com/en/rest/dependabot/alerts).
+
+The collector uses `GITHUB_TOKEN` with `contents: read`, `actions: read`,
+`issues: read`, `pull-requests: read`, and `security-events: read`. No token has
+Azure access, OIDC permission, or repository contents-write permission.
+The separate publisher job has only `contents: read` to check out its trusted
+script and `issues: write` to update the pre-created dashboard. Publication is
+restricted to default-branch schedule/manual runs, serialized with workflow
+concurrency, and never uses `pull_request_target` or executes PR-supplied scripts
+with write privileges.
+
+Dependabot alert access is not guaranteed with `GITHUB_TOKEN`; GitHub does not
+offer a `dependabot: read` Actions permission. Alert 403/404 responses are shown
+as **unavailable**, not zero. The local baseline's authenticated user may see
+data the scheduled token cannot. No additional secret is requested to work around
+this. Code-scanning availability also depends on the enabled feature and token.
+
+Required-source failures, malformed/incomplete pagination, rate limits after
+bounded retries, and unknown deployment job mappings fail collection and preserve
+the last published dashboard. Optional alerts are unavailable only for 403/404;
+other errors fail rather than producing reassuring empty results. The collector
+does not use the search API's capped results and fetches all retained runs/attempts
+and PRs, including earlier records needed for first-merge attribution. As the
+repository grows, a run may reach its explicit timeout; investigate rather than
+silently truncating the population.
+
+GitHub APIs are not transactional. Collection start/end disclose the observation
+interval; the entire repository is not frozen at one instant. Deleted/expired
+workflow history and historical alert states cannot be recovered. API pagination
+counts are checked when provided, but retained records are not proof of all-time
+completeness. CI combines build, tests, coverage collection, and CodeQL in one job;
+CI failure is not automatically a vulnerability or test failure.
+
+### History, publication, and operation
+
+Each successful collection writes `report.md`, `report.json`, and an allowlisted
+`evidence.json` containing IDs, timestamps, outcomes, author identifiers, and issue
+links. It never archives PR/issue bodies, logs, tokens, or vulnerability payloads.
+These are uploaded as `sdlc-metrics-<run_id>-<attempt>` artifacts for 90 days, subject
+to repository retention policy and manual deletion, and Markdown is included in
+the GitHub Step Summary.
+
+The publisher is explicitly configured for dashboard issue 28. It verifies the
+issue marker and owner, so a title collision cannot select an unrelated issue.
+There is no automated issue creation and no weekly issue spam. Closed dashboards
+are reused without reopening. If the issue is removed, restore it or intentionally
+bootstrap a replacement and update the configured number and documentation;
+publication fails rather than creating surprise replacements.
+
+A stable period marker deduplicates archived comments. Reruns refresh the current
+body but preserve the original comment; its original observation timestamp remains
+visible. Older windows/observations cannot overwrite a newer current body.
+Archived comments provide history after artifact expiry, but remain subject to
+normal issue permissions, edits, and deletion. Routine output is not committed.
+
+To collect a **read-only** preview with an already authenticated `gh` CLI:
+
+```bash
+python3 scripts/sdlc_metrics.py collect \
+  --repository sahad7793/agetic-sdlc-demo --output /tmp/sdlc-metrics-preview
+python3 -m unittest discover -s tests/sdlc_metrics
+```
+
+`--baseline` additionally calculates all available early history up to collection
+start. The explicit `publish` subcommand writes to the dashboard and is not part
+of preview or tests. Prefer **Actions > SDLC Metrics > Run workflow** on `main`
+for publication after merge. Tests use fixtures/fake clients and need no network
+or credential.
+
+The committed baseline is a local read-only observation. The workflow becomes
+eligible for scheduled/default-branch publication only after a human merges the
+PR. Local API access and a green PR check do not prove that the first scheduled
+`GITHUB_TOKEN` run can read optional alerts; inspect that run's availability notes.
+
+### Interpreting change
+
+Review delivery speed alongside reliability, link coverage, and sample size.
+Growing link coverage changes the measured lead-time population; dependency PRs
+and approval delays can dominate small cohorts. A comparison between two
+agent-enabled periods cannot establish that agents caused improvement. There is
+no controlled pre-agentic baseline or complete attribution of locally assisted
+work. Do not interpret these metrics as individual productivity, escaped-defect
+rate, DORA change-failure rate, MTTR, or proof of advice quality. Those require
+additional evidence that this report deliberately does not invent.
+
 ## Getting started for the repository owner
 
 ### 1. Enable security features

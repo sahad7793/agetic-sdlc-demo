@@ -1,0 +1,76 @@
+name: SDLC Metrics
+
+on:
+  schedule:
+    - cron: "30 8 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sdlc-metrics-dashboard
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+      security-events: read
+    steps:
+      - name: Check out trusted default-branch source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check metric contracts
+        run: python3 -m unittest discover -s tests/sdlc_metrics
+
+      - name: Collect read-only metrics
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/sdlc_metrics.py collect --repository "$REPOSITORY" --output metrics-output
+
+      - name: Publish step summary
+        run: cat metrics-output/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain dated report and normalized evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdlc-metrics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: metrics-output/
+          retention-days: 90
+          if-no-files-found: error
+
+  publish:
+    needs: collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out trusted publisher
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download this run's report
+        uses: actions/download-artifact@v8
+        with:
+          name: sdlc-metrics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: metrics-output
+
+      - name: Refresh dashboard and preserve the window snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: >-
+          python3 scripts/sdlc_metrics.py publish
+          --repository "$REPOSITORY" --issue 28 --report metrics-output/report.json
