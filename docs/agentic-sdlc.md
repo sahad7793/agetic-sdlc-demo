@@ -865,10 +865,10 @@ This repository uses a repository ruleset (**Settings > Rules > Rulesets**) name
 
 - Require a pull request before merging, with at least one approving review.
 - Dismiss stale approvals when new commits are pushed.
-- Require the CI workflow's **Build, test, and analyze** status check to pass, using the up-to-date/strict policy.
+- Require the CI workflow's **Build, test, and analyze** status check to pass, using the up-to-date/strict policy. The check is pinned to the GitHub Actions app, so a same-named status from another source cannot satisfy it.
 - Block force pushes and branch deletion.
 
-**Bypass policy:** repository admins may bypass this ruleset (`bypass_actors: RepositoryRole "admin"`, mode `always`). This lets the solo repository owner merge their own changes (e.g. dependency policy fixes) without waiting on a second approver, since GitHub does not allow self-approval of your own pull request. Implementation agents and other collaborators are not granted bypass, so their pull requests always require a human's approving review and a green CI run before merge.
+**Bypass policy:** repository admins may bypass this ruleset (`bypass_actors: RepositoryRole "admin"`, mode `pull_request`). The bypass applies only when merging a pull request: direct pushes, force pushes, and deletion of `main` stay blocked for everyone, admins included. This lets the solo repository owner merge their own changes (e.g. dependency policy fixes) without waiting on a second approver, since GitHub does not allow self-approval of your own pull request. Implementation agents and other collaborators are not granted bypass, so their pull requests always require a human's approving review and a green CI run before merge.
 
 **Merging your own PR as the solo owner.** GitHub always disables "Approve" for a pull request's own author (there is no repository setting that changes this), so a solo owner's PRs will show `mergeStateStatus: BLOCKED` on the review requirement even with CI green. Verify your CI is passing first, then use the bypass rather than treating it as an error:
 
