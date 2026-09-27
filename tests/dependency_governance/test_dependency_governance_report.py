@@ -1,6 +1,7 @@
 import importlib.util
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
@@ -58,6 +59,11 @@ class FakeApiError(Exception):
 
 
 class GitHubClientTests(unittest.TestCase):
+    def setUp(self):
+        self.environment = patch.dict(os.environ, {"GH_TOKEN": "test-token"})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
     def test_pages_returns_single_page(self):
         api = governance.GitHub()
         data = [{"id": 1}, {"id": 2}]
