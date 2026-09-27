@@ -775,6 +775,84 @@ GitHub Environment variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
 itself. Until that exists, the workflow can be reviewed and its tests run, but
 should not be dispatched.
 
+## Dependency governance
+
+This closes the dependency governance maturity gap with a read-only, deterministic report that surfaces Dependabot and CodeQL security alerts and pending dependency updates without auto-remediation or auto-merge. No alert is dismissed, no pull request is merged, no setting is changed by any script or workflow in this section; every action remains a human decision and is evidence-based. This repository uses GitHub-native Dependabot alerts and CodeQL code scanning (no additional tools) and a weekly report workflow that runs tests, collects the current inventory, renders markdown, and uploads to a step summary and artifact—no issue posting or auto-remediation in the first iteration.
+
+### Dependency update cadence and ownership
+
+**Dependabot:** Configured by GitHub (repository **Settings > Code security and analysis > Dependabot**) to open pull requests weekly for all package ecosystems (`npm`, `pip`, etc.). The repository owner is solely responsible for reviewing and merging each dependency update PR.
+
+**CodeQL code scanning:** Enabled on every push to `main` and on every pull request (`.github/workflows/ci.yml`). The sole repository owner reviews findings as they arrive.
+
+**Ownership routing via CODEOWNERS:** The dependency governance script and workflow (`.github/workflows/dependency-governance-report.yml`, `scripts/dependency_governance_report.py`) are routed to `@sahad7793` in `.github/CODEOWNERS`; changes to these files require owner approval.
+
+### Vulnerability review runbook (non-enforced guidance)
+
+The repository does not auto-merge or auto-dismiss any alert. The following guidance reflects common incident response timelines for security vulnerabilities and is advisory only; timeframes may shift based on exploitability, workload, and business impact.
+
+| Severity | Recommended review | Suggested action |
+| --- | --- | --- |
+| Critical | 1–3 days | Treat as incident; consider hotfix branch if main cannot merge quickly. Escalate if external guidance recommends it. |
+| High | 1–7 days | Prioritize in regular sprint; merge after dependency updates are tested (usually < 1 day). Defer only with risk acceptance from the owner. |
+| Medium | 2–4 weeks | Include in planned sprint or the next two-week window. Low-urgency patches can wait for a common dependency cycle. |
+| Low | 4–8 weeks | Consider batching with other low-priority updates to reduce CI load and review churn. Automatic remediation tools often flag these; hold to realistic timelines to avoid alert fatigue. |
+| Unknown | On receipt | Investigate the rule or advisory; severity classification may not be available. Default to Medium guidance until clarified. |
+
+**Guidance limits:** This repository runs no SLA automation, fine-tuning alerts based on CVSS scores, or automated escalation. The timelines above are recommendations only. Real-world factors include:
+- Exploitability (is a public exploit available?)
+- Attack surface (does your workload expose the vulnerable code path?)
+- Mitigations already in place (containerization, network isolation, input validation)
+- Cost of update (does the patch break an API? require app redeployment?)
+- Testing infrastructure (how much CI time is needed to validate the change?)
+
+### Read-only report and no auto-merge
+
+Every Monday at 9 AM UTC (configurable), a GitHub Action workflow runs:
+
+1. **Unit tests** for the governance script (`tests/dependency_governance/test_dependency_governance_report.py`).
+2. **Collection** of the current inventory:
+   - Open Dependabot alerts (severity, package, age).
+   - Open CodeQL code-scanning alerts (severity, rule, age).
+   - Open pull requests authored by the Dependabot bot (to see pending updates awaiting review).
+3. **Report rendering** (deterministic markdown, no LLM, no fabrication on unavailable sources).
+4. **Post to step summary** and upload to a 90-day artifact.
+
+The script requires GitHub OIDC token authentication (`GH_TOKEN` or `GITHUB_TOKEN` environment variable) and these minimal permissions:
+- `contents: read` (to identify the repository)
+- `security-events: read` (to access CodeQL alerts; required from day one)
+- `pull-requests: read` (to list Dependabot PRs)
+
+**Failure mode:** If collection fails (e.g. `security-events: read` not granted), the workflow fails closed and appends an error message to the step summary. It never reports a fabricated "0 alerts" or suppresses the error. This mirrors `scripts/sdlc_metrics.py`'s alert-handling pattern.
+
+**Dependabot auto-merge is intentionally not configured.** Every dependency update PR requires:
+- Human review of the change (changelog, upgrade notes, breaking changes).
+- A green CI run (all tests, linting, type-checking pass).
+- Owner approval if the solo owner's PRs bypass branch protection.
+
+The governance report shows how many updates are pending, how old the oldest is, and which are high/critical severity; it is the owner's job to triage and merge. Tools like Renovate can auto-merge; this repository deliberately uses Dependabot's default (no auto-merge) to keep the human in control.
+
+### Script and workflow details
+
+- **Script:** `scripts/dependency_governance_report.py` — ~280 lines of Python (stdlib only, no external dependencies).
+  - Collects via GitHub REST API (no GraphQL, so no complex query builder).
+  - Handles pagination, rate-limiting (429 backoff), and 403/404 unavailable sources.
+  - Outputs three files to the workflow artifact:
+    - `evidence.json` — raw API responses + schema version for auditing.
+    - `report.json` — aggregated metrics (count by severity, oldest age, PR list).
+    - `report.md` — human-readable markdown for the step summary.
+
+- **Workflow:** `.github/workflows/dependency-governance-report.yml`
+  - Runs weekly on schedule, manually via `workflow_dispatch`, or on PRs that touch the script/tests.
+  - Stores reports for 90 days; no automatic issue posting or PR commenting.
+
+### Future iterations
+
+Planned but not yet implemented:
+- Secret-scanning alerts (requires confirming GitHub token permission model for the `secret_scanning` endpoint).
+- Optional report-to-issue posting (requires owner decision and a separate GitHub token with write permissions; would be manual/opt-in, not automatic).
+- Integration with vulnerability disclosure or SLA tracking tools.
+
 ## Getting started for the repository owner
 
 ### 1. Enable security features
@@ -836,3 +914,7 @@ request template). As real collaborators or teams join, replace individual
 entries in `.github/CODEOWNERS` with the relevant team (e.g.
 `@sahad7793/platform`) instead of adding more usernames ad hoc, and only then
 does turning on code-owner enforcement change who is requested for review.
+
+### 7. Review dependency governance
+
+Open **Settings > Code security and analysis > Dependabot** and confirm that Dependabot alerts and version updates are enabled for all package ecosystems your application uses. Verify CodeQL scanning is enabled (see "Protect `main`" above for workflow setup). See "Dependency governance" for the human-driven review process, cadence, and the weekly governance report that surfaces pending updates and high-severity alerts.

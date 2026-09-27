@@ -21,10 +21,11 @@
 # CI/CD and repository automation: workflow permissions, CI, deploy, rollback
 /.github/workflows/ @sahad7793
 
-# Deployment, rollback, and access-provisioning scripts
+# Deployment, rollback, access-provisioning, and dependency governance scripts
 /scripts/provision-infrastructure.sh @sahad7793
 /scripts/grant-sql-access.sh @sahad7793
 /scripts/rollback.py @sahad7793
+/scripts/dependency_governance_report.py @sahad7793
 
 # Security- and deployment-relevant documentation
 /docs/agentic-sdlc.md @sahad7793

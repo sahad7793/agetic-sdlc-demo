@@ -36,6 +36,9 @@ jobs:
       - name: Test cost-governance report contracts
         run: python3 -m unittest discover -s tests/cost_governance
 
+      - name: Test dependency-governance report contracts
+        run: python3 -m unittest discover -s tests/dependency_governance
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
