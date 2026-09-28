@@ -33,7 +33,9 @@ for the design, baseline lifecycle, and the manual, opt-in staging smoke mode.
 - **Repositories** isolate EF Core data access. The app uses SQLite locally; integration tests replace it with EF Core InMemory.
 - **DTOs** define the API contract and validation boundary so EF entities are never returned directly.
 
-Read [docs/agentic-sdlc.md](docs/agentic-sdlc.md) for the complete issue-to-merge workflow and the repository settings the owner must enable.
+Read [docs/agentic-sdlc.md](docs/agentic-sdlc.md) for the complete issue-to-merge
+workflow, the [Agent roster](docs/agentic-sdlc.md#agent-roster), and repository
+settings the owner must enable.
 Read the [agent security policy](docs/agent-security-policy.md) for prompt-injection,
 least-privilege, and human-approval guardrails.
 For design changes, use the [ADR guide](docs/adr/README.md) and

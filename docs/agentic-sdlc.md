@@ -15,6 +15,23 @@ See the [agent security policy](agent-security-policy.md) for safeguards
 against prompt injection and for the boundaries on permissions, secrets, and
 human approvals.
 
+## Agent roster
+
+| Lifecycle stage | Agent | Human gate |
+| --- | --- | --- |
+| Issue intake and requirements | [`product-analyst`](../.github/agents/product-analyst.agent.md) | Maintainer approves scope and acceptance criteria before implementation. |
+| Solution design | [`architect`](../.github/agents/architect.agent.md) | Human reviewer accepts or rejects the Proposed ADR and design before implementation. |
+| Implementation verification | [`test-engineer`](../.github/agents/test-engineer.agent.md) | Human author/reviewer verifies test intent and CI results. |
+| Pull request review | [`reviewer`](../.github/agents/reviewer.agent.md) | Human reviewer decides findings and provides required approval; agents never approve or merge. |
+| Security review | [`security-reviewer`](../.github/agents/security-reviewer.agent.md) | Maintainer reviews findings and approves any security-sensitive remediation. |
+| Release preparation | [`release-manager`](../.github/agents/release-manager.agent.md) | Human verifies drafts and separately authorizes any publication. |
+| Incident response | [`ops-investigator`](../.github/agents/ops-investigator.agent.md) | Incident commander decides commands, rollback, and any production action. |
+
+These profiles are advisory task roles, not policy bypasses. Their inputs,
+outputs, tool limits, and forbidden actions are defined in each profile;
+humans retain approval, merge, deployment, release-publication, and rollback
+authority.
+
 ### Pull request issue-link check
 
 The **Issue link check** workflow is an advisory validation of pull request
