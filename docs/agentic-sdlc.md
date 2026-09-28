@@ -484,12 +484,15 @@ Edit the `emailReceivers` (or add `webhookReceivers` / SMS / voice / Teams recei
 > **⚠️ New email receivers require manual OTP verification.** Azure Monitor now enforces one-time-passcode (OTP) verification for action-group email receivers. An email address added via Bicep/ARM does **not** automatically receive or accept notifications — Azure silently drops both real alert emails and test notifications (`az monitor action-group test-notifications create ... -a email ...` returns `BadRequest: There are no valid receivers in the request`) until a human opens the verification email Azure sends and clicks the link (or completes it in the Portal via **Action group → Email receiver → Verify**). This is easy to miss because the receiver's `status` field still shows `Enabled` — that flag is unrelated to OTP-verification state. Verification persists tenant-wide: once an address is verified for one action group, it is automatically verified for every other action group in the same tenant (confirmed in this repo — verifying `sahad@saasberrylabs.com` on staging's action group also unblocked production's identical receiver with no extra step). If you don't receive alert emails after adding a new address, first confirm delivery with `az monitor action-group test-notifications create --action-group <ag-name> -g <rg> --alert-type webtestalert -a email <receiver-name> <address> usecommonalertschema` and check the Portal for a pending verification prompt before assuming the Bicep wiring is wrong.
 
 ```bash
+COST_CENTER='<your-real-cost-center-code>'
+OWNER='<your-real-owner-or-team>'
 az deployment group create \
   --resource-group rg-taskmanagement-staging-centralus \
   --template-file infra/observability.bicep \
   --parameters location=centralus environmentName=staging \
     containerAppId=<id> containerAppName=<name> applicationInsightsId=<id> \
-    healthCheckUrl=<url> alertEmail=<email>
+    healthCheckUrl=<url> alertEmail=<email> \
+    costCenter="$COST_CENTER" owner="$OWNER"
 ```
 
 Do not re-run `infra/environment.bicep` or `infra/shared.bicep` directly against a live environment — those templates default `containerImage` to a placeholder and would reset the running Container App. They exist to keep a from-scratch bootstrap (`scripts/provision-infrastructure.sh`) complete; deploy `observability.bicep`/`workbook.bicep` standalone for updates to already-running environments.
@@ -681,25 +684,35 @@ is enforced structurally, not just by convention.
 
 ### Cost-allocation tag standard
 
-Every environment and shared resource carries these tags, aligned with the
+Every taggable environment and shared resource carries these tags, aligned with the
 [Cloud Adoption Framework tagging guidance](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/resource-tagging):
 
 | Tag | Meaning | Source |
 | --- | --- | --- |
-| `application` | Fixed to `taskmanagement`. | `scripts/provision-infrastructure.sh` |
-| `environment` | `staging` or `production`. | `infra/environment.bicep` |
+| `application` | Fixed to `taskmanagement`. | Enforced by each Bicep `resourceTags` object |
+| `environment` | `staging`, `production`, or `shared`. | `infra/environment.bicep`; shared templates use `shared` |
 | `component` | Set on shared resources (e.g. `registry`). | `scripts/provision-infrastructure.sh` |
 | `costCenter` | The organization's cost-center/GL code accountable for this resource's spend. | Required Bicep parameter — **no default** |
 | `owner` | The team or individual accountable for this resource. | Required Bicep parameter — **no default** |
 
-`infra/shared.bicep` and `infra/environment.bicep` require `costCenter` and
-`owner` as explicit parameters and merge them into every resource's tags with
-`union()`, so they can't be silently omitted on a future deployment. They
+`infra/shared.bicep`, `infra/environment.bicep`,
+`infra/observability.bicep`, and `infra/workbook.bicep` require `costCenter`
+and `owner` as explicit parameters and merge all four report-required tags
+into each taggable resource with `union()`, so they can't be silently omitted
+or overridden on a future deployment. They
 intentionally have no default value: inventing a placeholder cost-center or
 owner here would create false confidence in a value nobody chose. Operators
 must supply their organization's real values via
 `scripts/provision-infrastructure.sh`'s `cost_center_tag`/`owner_tag`
 variables (clearly marked `CHANGEME-*`) before running it.
+
+Azure role assignments and SQL firewall rules are ARM child resources whose
+resource types do not support resource tags; all other resource declarations
+in these templates carry the required tags. Resource-group tags are also set
+by the bootstrap script, but do not automatically propagate to existing child
+resources. This change only affects future provisioning and does not retag
+the 45 resources in the latest report; retagging those remains the manual
+operator step below.
 
 **This only affects future provisioning.** The six existing
 `rg-taskmanagement-*` resource groups (three actively used, three preserved
@@ -714,8 +727,10 @@ would be a live Azure mutation outside this repository's automation.
 All commands below are run manually by an operator with the required role
 (table below); none are automated by a script or workflow in this repository.
 
-**1. Retrofit tags onto existing resources.** Run per resource group, after
-substituting the organization's real values for the placeholders:
+**1. Retrofit tags onto existing resources.** Run per resource group, after substituting the organization's real values for
+the placeholders. This updates resource-group tags only; the report checks
+each resource's own tags, so this command alone will not make child resources
+compliant:
 
 ```bash
 COST_CENTER='<your-real-cost-center-code>'
@@ -727,26 +742,36 @@ for rg in rg-taskmanagement-shared rg-taskmanagement-staging-centralus rg-taskma
 done
 ```
 
-Extend to child resources (Container Apps, SQL servers, ACR, etc.) with
-`az resource tag` if per-resource (not just per-resource-group) tagging is
-required for your cost reports; Azure Cost Management can also
+For every taggable child resource, use
+`az resource tag --ids RESOURCE_ID --operation merge --tags application=taskmanagement
+environment=ENVIRONMENT costCenter="$COST_CENTER" owner="$OWNER"` with
+`ENVIRONMENT` set to `staging`, `production`, or `shared` as appropriate. Azure
+Cost Management can
 [inherit resource-group tags onto child resources](https://learn.microsoft.com/azure/cost-management-billing/costs/enable-tag-inheritance)
-without retagging every resource individually.
+for cost analysis, but inherited tags do not satisfy this report's
+resource-level compliance check.
 
-**2. Create a budget.** No threshold is proposed here — set one from your own
-historical spend and business judgement, at the resource-group scope (so
-staging and production alert independently) or subscription scope, using
-either the Portal (**Cost Management + Billing > Budgets**) or the
+**2. Create a budget.** No budget amount or alert threshold is approved or
+proposed in this repository, so no budget IaC is included. Before adding it,
+the owner must approve (a) the budget scope and monthly amount/currency for
+each selected resource group, (b) the percentage trigger(s) for actual spend,
+and (c) the percentage trigger(s) for forecast spend. The scope decision must
+also say whether the three preserved region-fallback groups are included.
+Choose values from historical spend and business judgement, at the
+resource-group scope (so staging and production alert independently) or
+subscription scope, using either the Portal (**Cost Management + Billing > Budgets**) or the
 [Bicep quickstart](https://learn.microsoft.com/azure/cost-management-billing/costs/quick-create-budget-bicep). Do not create a budget scoped so broadly that
 an unrelated subscription workload triggers a false alert for this
 application.
 
-**3. Wire alert delivery.** Reuse the per-environment Action Groups already
+**3. Approve alert delivery.** The owner must also choose whether to reuse the
+per-environment Action Groups already
 created by `infra/observability.bicep` (`task-api-stage-*-ag`,
 `task-api-prod-west-*-ag`) if budget alerts should reach the same on-call
 recipients as availability/error alerts, or create a separate finance-facing
-Action Group if spend alerts should go to different people. Either is a valid
-operator choice; this repository does not prescribe one.
+Action Group if spend alerts should go to different people, and approve the
+specific recipient(s). No amounts, percentage thresholds, scope selection, or
+budget notification recipients are established here.
 
 **4. Review the orphaned region-fallback resource groups.**
 `rg-taskmanagement-staging`, `rg-taskmanagement-production` (both `eastus2`),
@@ -787,6 +812,8 @@ can't be enumerated.
 - Tag compliance: the percentage of resources across the six
   `rg-taskmanagement-*` resource groups carrying all of `application`,
   `environment`, `costCenter`, and `owner`.
+- Latest observed result: 0 of 45 resources across six resource groups had all
+  four tags; IaC changes do not alter those already-provisioned resources.
 - Resource inventory: counts and types per resource group/environment.
 - Budget and Action Group **existence** (present/absent, and count) per scope —
   amounts, current spend, and forecast fields are never read or written.

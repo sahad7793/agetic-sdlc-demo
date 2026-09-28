@@ -15,8 +15,21 @@ param stagingContainerAppId string
 @description('Resource ID of the production Container App.')
 param productionContainerAppId string
 
-@description('Tags applied to the workbook.')
+@description('Cost-allocation tag identifying the owning cost center/GL code for shared resources. No default: the operator must supply the organization\'s actual value.')
+param costCenter string
+
+@description('Cost-allocation tag identifying the owning team or individual accountable for shared-resource spend. No default: the operator must supply the organization\'s actual value.')
+param owner string
+
+@description('Additional tags applied to the workbook.')
 param tags object = {}
+
+var resourceTags = union(tags, {
+  application: 'taskmanagement'
+  environment: 'shared'
+  costCenter: costCenter
+  owner: owner
+})
 
 var workbookDisplayName = 'Task Management API — Observability'
 var serializedData = replace(
@@ -40,7 +53,7 @@ var serializedData = replace(
 resource workbook 'Microsoft.Insights/workbooks@2022-04-01' = {
   name: guid('taskmanagement-observability-workbook')
   location: location
-  tags: tags
+  tags: resourceTags
   kind: 'shared'
   properties: {
     displayName: workbookDisplayName
