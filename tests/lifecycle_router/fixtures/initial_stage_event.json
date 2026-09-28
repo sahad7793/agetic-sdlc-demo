@@ -1,0 +1,12 @@
+{
+  "action": "labeled",
+  "issue": {
+    "number": 123,
+    "labels": [
+      {"name": "bug"},
+      {"name": "stage:needs-spec"}
+    ]
+  },
+  "label": {"name": "stage:needs-spec"},
+  "sender": {"login": "maintainer"}
+}

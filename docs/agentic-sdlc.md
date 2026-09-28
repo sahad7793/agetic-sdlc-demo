@@ -32,6 +32,63 @@ outputs, tool limits, and forbidden actions are defined in each profile;
 humans retain approval, merge, deployment, release-publication, and rollback
 authority.
 
+### Issue lifecycle labels
+
+The issue lifecycle router advances one `stage:*` label at a time. A transition
+must move forward exactly one stage or return to `stage:needs-spec`. The
+`stage:spec-approved` and `stage:plan-approved` labels are human gates: only a
+non-bot collaborator with write, maintain, or admin permission can apply them.
+The router removes invalid labels, explains allowed transitions, removes the
+previous stage after a valid transition, and comments with the next owner.
+Issue content is treated only as data; this workflow does not execute it.
+
+The router keeps its token to `issues: write` and `contents: read` as required
+by the repository's least-privilege boundary. GitHub may deny the collaborator
+permission API at that scope; when permission cannot be verified, the router
+removes the attempted approval label and comments that the gate is blocked.
+Do not widen the workflow token without an explicit maintainer decision.
+
+```mermaid
+stateDiagram-v2
+    [*] --> NeedsSpec: issue opened / stage:needs-spec
+    NeedsSpec --> SpecReady: product-analyst posts requirements
+    SpecReady --> SpecApproved: maintainer approves scope and acceptance criteria
+    SpecApproved --> PlanReady: architect posts solution design
+    PlanReady --> PlanApproved: maintainer approves design
+    PlanApproved --> InProgress: Copilot coding agent or human starts implementation
+    InProgress --> InReview: test-engineer verifies / implementation is ready
+    InReview --> Done: reviewer and human reviewer complete review; human merges
+    SpecReady --> NeedsSpec: revise requirements
+    SpecApproved --> NeedsSpec: revisit requirements
+    PlanReady --> NeedsSpec: revise requirements
+    PlanApproved --> NeedsSpec: revisit requirements
+    InProgress --> NeedsSpec: revise scope
+    InReview --> NeedsSpec: changes require revised requirements
+    Done --> NeedsSpec: reopen for revised requirements
+```
+
+| Stage label | Owner / next action | Human gate |
+| --- | --- | --- |
+| `stage:needs-spec` | [`product-analyst`](../.github/agents/product-analyst.agent.md) prepares requirements. | Maintainer approves scope and acceptance criteria. |
+| `stage:spec-ready` | Maintainer reviews posted requirements. | Applying `stage:spec-approved` requires write, maintain, or admin permission. |
+| `stage:spec-approved` | [`architect`](../.github/agents/architect.agent.md) prepares the design. | Human accepts or rejects the design. |
+| `stage:plan-ready` | Maintainer reviews the design. | Applying `stage:plan-approved` requires write, maintain, or admin permission. |
+| `stage:plan-approved` | Copilot coding agent or human implementer begins work. | Human-approved issue defines implementation scope. |
+| `stage:in-progress` | [`test-engineer`](../.github/agents/test-engineer.agent.md) prepares focused verification. | Human author/reviewer verifies test intent and CI. |
+| `stage:in-review` | [`reviewer`](../.github/agents/reviewer.agent.md) reports findings. | Human reviewer provides required approval and merges. |
+| `stage:done` | [`release-manager`](../.github/agents/release-manager.agent.md) may prepare draft notes after merge. | Human retains merge and release-publication authority. |
+
+Lifecycle labels and their colors, descriptions, and owners are defined in
+`.github/lifecycle-labels.json`. After merging this change, the repository
+owner creates or updates the labels by manually dispatching **Sync lifecycle
+labels** in Actions, or with:
+
+```bash
+gh workflow run lifecycle-label-sync.yml --ref main
+```
+
+The sync workflow is manual-only; it is not run by this pull request.
+
 ### Pull request issue-link check
 
 The **Issue link check** workflow is an advisory validation of pull request

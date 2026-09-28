@@ -39,6 +39,9 @@ jobs:
       - name: Test issue-link check
         run: python3 -m unittest discover -s tests/issue_link
 
+      - name: Test lifecycle label router
+        run: python3 -m unittest discover -s tests/lifecycle_router
+
       - name: Test cost-governance report contracts
         run: python3 -m unittest discover -s tests/cost_governance
 
