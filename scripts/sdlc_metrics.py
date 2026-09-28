@@ -15,6 +15,11 @@ import time
 import urllib.error
 import urllib.request
 
+if __package__:
+    from .issue_references import extract_issue_references
+else:
+    from issue_references import extract_issue_references
+
 
 SCHEMA_VERSION = 2
 API_ROOT = "https://api.github.com"
@@ -141,7 +146,7 @@ class GitHub:
 
 
 def collect_prs(api, owner, name):
-    fields = """number title createdAt mergedAt state baseRefName author { login __typename }
+    fields = """number title body createdAt mergedAt state baseRefName author { login __typename }
         mergedBy { login }
         closingIssuesReferences(first:100) {
           nodes { number createdAt repository { nameWithOwner } }
@@ -192,6 +197,12 @@ def collect_prs(api, owner, name):
                 "author_is_bot": bool(pr["author"] and pr["author"]["__typename"] == "Bot"),
                 "is_revert": pr["title"].lower().startswith("revert"),
                 "merged_by": pr["mergedBy"]["login"] if pr["mergedBy"] else None,
+                "issue_references": [
+                    {"repository": issue_repository, "number": number}
+                    for issue_repository, number in extract_issue_references(
+                        pr.get("body"), default_repository=f"{owner}/{name}"
+                    )
+                ],
                 "issues": [{"number": issue["number"], "created_at": issue["createdAt"],
                             "repository": issue["repository"]["nameWithOwner"]} for issue in issues],
             })
@@ -264,6 +275,9 @@ def collect_defect_issues(api, repository, collected_at):
                 "number": issue["number"], "created_at": issue["created_at"],
                 "labels": labels, "references_available": references_available,
                 "referenced_pr_numbers": sorted(referenced_pr_numbers),
+                "synthetic": is_synthetic_issue({
+                    "labels": labels, "title": issue.get("title", ""),
+                }),
             })
     return result
 
@@ -389,11 +403,17 @@ def author_group(pr):
 
 def authorship(pr):
     login = (pr["author"] or "").lower()
-    if (pr.get("author_is_bot") or login.endswith("[bot]")
-            or login in {"dependabot", "github-actions"} or "copilot" in login):
+    if login in {
+        "dependabot", "dependabot[bot]", "renovate", "renovate[bot]",
+        "github-actions", "github-actions[bot]", "app/github-actions",
+    }:
+        return "automation"
+    if "copilot" in login:
         return "agent"
     if any(commit.get("copilot_coauthored") for commit in pr.get("commits", [])):
         return "agent"
+    if pr.get("author_is_bot") or login.endswith("[bot]"):
+        return "automation"
     return "human" if pr["author"] else "unknown"
 
 
@@ -403,6 +423,23 @@ def issue_categories(issue):
         "bug": "bug" in labels,
         "incident": bool(labels & {"incident", "sev1", "sev2", "sev3", "sev4"}),
     }
+
+
+def is_synthetic_issue(issue):
+    labels = {label.strip().lower() for label in issue.get("labels", [])}
+    if issue.get("synthetic") or labels & {"test", "drill", "synthetic"}:
+        return True
+    title = issue.get("title", "")
+    if re.match(r"^\[(?:test|drill|synthetic)\](?:\s|$)", title, re.IGNORECASE):
+        return True
+    incident_title = re.sub(
+        r"^\[incident\](?:\[[^\]]+\]){0,2}\s*", "", title, count=1, flags=re.IGNORECASE
+    )
+    return bool(re.match(
+        r"^(?:\[(?:test|drill|synthetic)\](?:\s|$)|"
+        r"(?:test only|synthetic|validation[- ]only|drill)\b)",
+        incident_title, re.IGNORECASE,
+    ))
 
 
 def rework_metrics(prs):
@@ -449,7 +486,12 @@ def escaped_defect_metrics(evidence, selected, merged, start, end):
             "available": False,
             "reason": "Labeled issue evidence is retained for the last 14 days",
         }
-    issues = [issue for issue in evidence.get("issues", []) if within(issue["created_at"], start, end)]
+    period_issues = [
+        issue for issue in evidence.get("issues", [])
+        if within(issue["created_at"], start, end)
+    ]
+    excluded_synthetic = sum(is_synthetic_issue(issue) for issue in period_issues)
+    issues = [issue for issue in period_issues if not is_synthetic_issue(issue)]
     categories = {issue["number"]: issue_categories(issue) for issue in issues}
     opened = {
         "bugs": sum(categories[number]["bug"] for number in categories),
@@ -459,7 +501,7 @@ def escaped_defect_metrics(evidence, selected, merged, start, end):
     references_available = all(issue.get("references_available", True) for issue in issues)
     counts = {
         group: {"bugs": 0, "incidents": 0, "unique_issues": 0, "merged_prs": 0}
-        for group in ("agent", "human", "unknown")
+        for group in ("agent", "human", "unknown", "automation")
     }
     pr_counts = {
         pr["number"]: {"bugs": 0, "incidents": 0, "unique_issues": 0, "attribution": set()}
@@ -522,6 +564,7 @@ def escaped_defect_metrics(evidence, selected, merged, start, end):
         "by_authorship": counts,
         "per_merged_pr": per_pr,
         "unattributed_issues": len(set(categories) - attributed_issues),
+        "excluded_synthetic_issues": excluded_synthetic,
         "attribution_window_days": DEFECT_ATTRIBUTION_DAYS,
         "attribution_method": (
             ("Explicit issue-to-PR references are available. " if references_available else
@@ -544,24 +587,35 @@ def period(evidence, start, end, baseline=False):
     eligible_rework = [pr for pr in selected if "reviews" in pr and "commits" in pr]
     earliest = {}
     linked_prs = set()
-    external_links = 0
+    external_reference_count = 0
     invalid_links = 0
     for pr in merged:
+        valid_references = set()
+        external_references = set()
         for issue in pr["issues"]:
-            if issue["repository"].lower() != repository.lower():
-                if pr in selected:
-                    external_links += 1
+            issue_repository = issue["repository"].lower()
+            if issue_repository != repository.lower():
+                external_references.add((issue_repository, issue["number"]))
                 continue
+            valid_references.add(issue["number"])
             duration = hours(issue["created_at"], pr["merged_at"])
             if duration < 0:
                 if pr in selected:
                     invalid_links += 1
                 continue
-            if pr in selected:
-                linked_prs.add(pr["number"])
             previous = earliest.get(issue["number"])
             if previous is None or timestamp(pr["merged_at"]) < timestamp(previous["merged_at"]):
                 earliest[issue["number"]] = {"merged_at": pr["merged_at"], "hours": duration}
+        for reference in pr.get("issue_references", []):
+            issue_repository = (reference.get("repository") or repository).lower()
+            if issue_repository == repository.lower():
+                valid_references.add(reference["number"])
+            else:
+                external_references.add((issue_repository, reference["number"]))
+        if pr in selected:
+            if valid_references:
+                linked_prs.add(pr["number"])
+            external_reference_count += len(external_references)
     lead_times = [link["hours"] for link in earliest.values() if within(link["merged_at"], start, end)]
     workflow_metrics = {}
     for kind in ("ci", "issue_triage", "weekly_report"):
@@ -616,14 +670,14 @@ def period(evidence, start, end, baseline=False):
         ),
         "rework_by_authorship": ({
             group: rework_metrics([pr for pr in eligible_rework if authorship(pr) == group])
-            for group in ("agent", "human", "unknown")
+            for group in ("agent", "human", "unknown", "automation")
         } if timestamp(start) >= timestamp(evidence.get("pr_activity_available_from", start))
             else None),
         "escaped_defects": escaped_defect_metrics(evidence, selected, merged, start, end),
         "issue_lead_time": durations(lead_times),
         "linked_merged_prs": len(linked_prs), "link_coverage_denominator": len(selected),
         "issue_to_deployment": {"available": False, "reason": PROVENANCE_LIMITATION},
-        "excluded": {"external_issue_references": external_links,
+        "excluded": {"external_issue_references": external_reference_count,
                      "negative_issue_durations": invalid_links,
                      "negative_pr_durations": len(invalid_cycles)},
         "workflows": workflow_metrics, "deployments": deployments,
@@ -791,6 +845,23 @@ def render(report):
             str(p["rework_by_authorship"][group]["pr_title_starts_with_revert"])
             if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
         ))
+    group = "automation"
+    row("Automation PRs: median review rounds", lambda p: (
+        median_cell(p["rework_by_authorship"][group]["review_rounds"])
+        if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+    ))
+    row("Automation PRs: median changes-requested reviews", lambda p: (
+        median_cell(p["rework_by_authorship"][group]["changes_requested_reviews"])
+        if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+    ))
+    row("Automation PRs: median commits after first reviewed commit", lambda p: (
+        median_cell(p["rework_by_authorship"][group]["commits_after_first_review"])
+        if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+    ))
+    row("Automation merged PRs reverted", lambda p: (
+        str(p["rework_by_authorship"][group]["pr_title_starts_with_revert"])
+        if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+    ))
     row("New bug issues opened", lambda p: (
         str(p["escaped_defects"]["opened"]["bugs"]) if p["escaped_defects"]["available"]
         else display(p["escaped_defects"]["reason"])
@@ -798,6 +869,10 @@ def render(report):
     row("New incident issues opened", lambda p: (
         str(p["escaped_defects"]["opened"]["incidents"]) if p["escaped_defects"]["available"]
         else display(p["escaped_defects"]["reason"])
+    ))
+    row("Excluded synthetic/test/drill issues", lambda p: (
+        str(p["escaped_defects"]["excluded_synthetic_issues"])
+        if p["escaped_defects"]["available"] else display(p["escaped_defects"]["reason"])
     ))
     row("Escaped defects by agent-authored PRs (bugs / incidents / unique issues)", lambda p: (
         f"{p['escaped_defects']['by_authorship']['agent']['bugs']} / "
@@ -815,6 +890,12 @@ def render(report):
         f"{p['escaped_defects']['by_authorship']['unknown']['bugs']} / "
         f"{p['escaped_defects']['by_authorship']['unknown']['incidents']} / "
         f"{p['escaped_defects']['by_authorship']['unknown']['unique_issues']}"
+        if p["escaped_defects"]["available"] else display(p["escaped_defects"]["reason"])
+    ))
+    row("Escaped defects by automation-authored PRs (bugs / incidents / unique issues)", lambda p: (
+        f"{p['escaped_defects']['by_authorship']['automation']['bugs']} / "
+        f"{p['escaped_defects']['by_authorship']['automation']['incidents']} / "
+        f"{p['escaped_defects']['by_authorship']['automation']['unique_issues']}"
         if p["escaped_defects"]["available"] else display(p["escaped_defects"]["reason"])
     ))
     row("Agent-authored PRs and gh-aw runs in audit trail", lambda p: (
@@ -917,15 +998,24 @@ def render(report):
         "- Delivery frequency uses successful job completion time; reused job IDs count once. "
         "Per-day rates are withheld for partial periods. Production success means the pipeline "
         "completed, not verified runtime health.",
-        "- Same-repository explicit closing links only; each issue uses its earliest linked main merge. "
-        "Unlinked work is not assigned a guessed lead time.",
+        "- Issue-link coverage includes valid same-repository references parsed from PR bodies using the "
+        "same `Fixes`/`Closes`/`Resolves`/`Refs`/`References` or GitHub issue-URL syntax as the PR check. "
+        "External-repository URLs are excluded and counted. Linked issue creation-to-merge lead time is "
+        "narrower: only GitHub's same-repository `closingIssuesReferences` (actual closing links) qualify; "
+        "each issue uses its earliest linked main merge, and body-only references never invent a creation "
+        "timestamp or closing event.",
         "- Defect counts include issues labeled `bug` and incidents labeled `incident` or `sev1`-`sev4`, "
-        "opened in the reporting window. Per-PR attribution prefers an explicit same-repository closing-issue "
+        "opened in the reporting window, except issues marked `test`, `drill`, or `synthetic`, or whose "
+        "title clearly starts with a test/drill marker. Apply the `synthetic` label to test incidents; "
+        "the title fallback also excludes legacy issues such as validation drills. Per-PR attribution "
+        "prefers an explicit same-repository closing-issue "
         "reference; otherwise it is a **heuristic** assigning the issue to the latest preceding main merge "
         "within 30 days. Temporal proximity is not causal proof. The opened count includes attributed and "
         "unattributed issues; defects linked to multiple PRs are assigned once.",
-        "- Agent PRs are authored by a bot/Copilot login or contain a `Co-authored-by: Copilot` commit trailer. "
-        "Other named authors are classified as human; missing authors are unknown. Review rounds count submitted "
+        "- Agent PRs are authored by a Copilot bot or contain a `Co-authored-by: Copilot` commit trailer, "
+        "unless authored by a known automation bot. Other bot accounts are automation, named non-bot authors "
+        "are human, and missing authors are unknown. "
+        "Review rounds count submitted "
         "non-comment reviews; commits after the first review count commits after the SHA it reviewed, a proxy "
         "for post-review rework. Reverted PRs have titles starting with `Revert`.",
         "- Agent audit data lists PR number, author, approving reviewers, merger, and matching gh-aw run IDs/URLs; "

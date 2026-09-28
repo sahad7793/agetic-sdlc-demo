@@ -1,11 +1,14 @@
 import importlib.util
 from pathlib import Path
+import sys
 import unittest
 
 
 SCRIPT = (Path(__file__).resolve().parents[2]
           / "scripts" / "issue_link_check.py")
 ROOT = SCRIPT.parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("issue_link_check", SCRIPT)
 issue_link_check = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(issue_link_check)
@@ -24,6 +27,18 @@ class PullRequestBodyTests(unittest.TestCase):
             "https://github.com/org/repo/issues/123bad", "author"))
         self.assertIsNotNone(issue_link_check.validate_pull_request_body(
             "Tracking: https://github.com/org/repo/pull/123", "author"))
+
+    def test_shared_parser_returns_visible_local_and_external_references(self):
+        references = issue_link_check.extract_issue_references(
+            "Closes #12\nRefs #13\nhttps://github.com/other/project/issues/14\n"
+            "<!-- Fixes #15 -->",
+            default_repository="Org/Repo",
+        )
+        self.assertEqual(references, [
+            ("org/repo", 12),
+            ("org/repo", 13),
+            ("other/project", 14),
+        ])
 
     def test_requires_a_reference_or_nonblank_no_issue_reason(self):
         for body in ("", "This change has no issue.", "No-Issue:", "No-Issue:   ",

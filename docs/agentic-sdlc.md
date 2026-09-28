@@ -56,6 +56,11 @@ permission API at that scope; when permission cannot be verified, the router
 removes the attempted approval label and comments that the gate is blocked.
 Do not widen the workflow token without an explicit maintainer decision.
 
+Apply the `synthetic` label to issues created for test or drill activity. The
+SDLC defect report excludes issues labeled `test`, `drill`, or `synthetic` and
+recognizes clear `[test]`/`[drill]` title markers as a fallback for older
+unlabeled drills. Do not use these markers on real incidents.
+
 ```mermaid
 stateDiagram-v2
     [*] --> NeedsSpec: issue opened / stage:needs-spec
@@ -616,10 +621,10 @@ are `N/A`, never a fabricated zero-hour duration or 100% reliability.
 | --- | --- | --- |
 | PR cycle time | Main-target PRs merged within the window; median elapsed hours from PR creation to merge, with sample count. | Includes draft/review waiting. Excludes unmerged PRs, other target branches, and negative durations. Author cohorts show Dependabot, explicitly named Copilot agent accounts, and other/unknown; the latter does not mean human-only. |
 | Rework | Per main PR merged within the window: median submitted non-comment reviews (review-round proxy), changes-requested reviews, and commits after the first review's commit SHA; also count titles starting with `Revert`. Each median includes its PR sample count. | Commits-after-review uses PR commit ordering relative to the first reviewed SHA, not a timestamped push event. Missing reviewed-SHA/commit evidence is unavailable, not zero. |
-| Escaped-defect candidates | Issues opened in the window labeled `bug`, or labeled `incident`/`sev1`/`sev2`/`sev3`/`sev4`; report bugs and incidents separately and total unique issues. Show per-merged-PR counts, unattributed counts, and agent/human/unknown authorship splits. | Explicit same-repository issue-to-PR timeline references take precedence. Otherwise, attribute to the latest preceding main merge within 30 days as a **heuristic**, not proof of causation. Each issue is assigned at most once. Bot/Copilot authors and PRs with a `Co-authored-by: Copilot` trailer are agents; named non-agent authors are human; missing authors are unknown. |
+| Escaped-defect candidates | Issues opened in the window labeled `bug`, or labeled `incident`/`sev1`/`sev2`/`sev3`/`sev4`; report bugs and incidents separately and total unique issues. Exclude test/drill issues labeled `test`, `drill`, or `synthetic`, and titles clearly marked as test/drill. Show per-merged-PR counts, unattributed counts, and agent/human/unknown/automation authorship splits. | Explicit same-repository issue-to-PR timeline references take precedence. Otherwise, attribute to the latest preceding main merge within 30 days as a **heuristic**, not proof of causation. Each issue is assigned at most once. Copilot bot authors and non-automation PRs with a `Co-authored-by: Copilot` trailer are agents; named non-bot authors are human; missing authors are unknown; Dependabot, Renovate, GitHub Actions, and other bots are automation. |
 | Agent audit trail | Agent-authored PRs created or merged in the window, including PR number, author, approving reviewers, merger, and matching gh-aw run IDs/URLs; also list gh-aw runs started in the window. | Read-only normalized API metadata only. No PR/issue bodies, prompts, secrets, review text, or tool-call logs. Full prompts/tool calls remain in originating session history; Actions details remain in GitHub Actions logs, subject to their access and retention. |
-| Issue-to-merge lead time | Explicit same-repository `closingIssuesReferences`; one sample per issue at its earliest linked main merge, assigned to that merge's window; median hours from issue creation. | No prose parsing, chronological guesses, or external issue references. A linked PR is not evidence that every requirement was delivered. Negative durations are excluded and counted. |
-| Issue-link coverage | Main PRs merged in the window with at least one valid same-repository closing link / all main PRs merged in the window. | Denominator includes bots and unlinked work. Also show unique issue sample count; PR coverage and issue sample size are different quantities. |
+| Issue-to-merge lead time | Explicit same-repository GitHub `closingIssuesReferences`; one sample per issue at its earliest linked main merge, assigned to that merge's window; median hours from issue creation. | Body-only references do not assert that a PR closed an issue and are not used to infer a creation timestamp or merge duration. External references and negative durations are excluded; negative durations are counted. |
+| Issue-link coverage | Main PRs merged in the window with at least one same-repository `Fixes`/`Closes`/`Resolves`/`Refs`/`References` issue-number reference or GitHub issue URL in the PR body, or a GitHub closing link / all main PRs merged in the window. Parsing follows `scripts/issue_link_check.py`, including ignoring HTML comments. | External-repository URLs are excluded and counted. Denominator includes automation and unlinked work. Also show unique issue sample count; PR coverage and issue sample size are different quantities. |
 | Issue-to-deployment lead time | **Unavailable until trustworthy deployed-source evidence is recorded.** | The deployment workflow checks out the triggering CI SHA. Automatic environment deployment SHA and outer `workflow_run.head_sha` do not independently identify the image source under concurrent pushes. No guessed issue-to-deployment timings are reported, and no production change is made to populate this metric. |
 | CI reliability | Every attempt of `ci.yml` whose `run_started_at` is in the window: successful attempts / decisive attempts. Decisive means `success`, `failure`, `timed_out`, `startup_failure`, or `action_required`. | Reruns count independently, preserving failed attempts. Counts for cancellations, skipped, neutral, stale, pending, and unknown are separate and excluded from the ratio. `action_required` can reflect authorization rather than a code defect. PR-triggered CI, main pushes, and other triggers are also separated. |
 | Staging/production delivery reliability | Unique deployment job IDs from **all** `deploy.yml` attempts, grouped by environment and job start time; same decisive-outcome denominator as CI. | Staging includes build/publish failures. Skipped production is not failure; approval-waiting jobs are pending. Reused jobs across reruns count once. Job names are explicitly mapped; an unmapped name fails collection instead of dropping data. |
@@ -640,12 +645,14 @@ approval waiting, are explicitly a separate inventory.
 `scripts/sdlc_metrics.py` uses these supported APIs:
 
 - [GraphQL pull requests](https://docs.github.com/en/graphql/reference/objects#pullrequest),
-  including `closingIssuesReferences`, creation/merge timestamps, base branch,
-  author, and merger; outer and nested connections are paginated.
+  including PR body references, `closingIssuesReferences`, creation/merge
+  timestamps, base branch, author, and merger; outer and nested connections are
+  paginated. PR bodies are parsed transiently; only normalized issue references
+  are retained.
 - [REST pull-request reviews and commits](https://docs.github.com/en/rest/pulls/reviews)
   for PRs created or merged in the last 14 days, and the issue list/timeline for
   recently updated labeled bug/incident issues. Commit messages are read transiently
-  only to detect the Copilot trailer; issue bodies are not inspected. Evidence stores
+  only to detect the Copilot trailer; issue bodies are not retained. Evidence stores
   only commit SHA/date/trailer flag, review state/date/SHA/reviewer, issue
   number/date/labels/PR references, and calculated PR metadata.
 - [REST workflow runs and attempts](https://docs.github.com/en/rest/actions/workflow-runs)
