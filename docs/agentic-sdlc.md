@@ -543,21 +543,23 @@ approval waiting, are explicitly a separate inventory.
   and [Dependabot alerts](https://docs.github.com/en/rest/dependabot/alerts).
 
 The collector uses `GITHUB_TOKEN` with `contents: read`, `actions: read`,
-`issues: read`, `pull-requests: read`, and `security-events: read`. No token has
-Azure access, OIDC permission, or repository contents-write permission.
+`issues: read`, `pull-requests: read`, `security-events: read`, and
+`vulnerability-alerts: read`. No token has Azure access, OIDC permission, or
+repository contents-write permission.
 The separate publisher job has only `contents: read` to check out its trusted
 script and `issues: write` to update the pre-created dashboard. Publication is
 restricted to default-branch schedule/manual runs, serialized with workflow
 concurrency, and never uses `pull_request_target` or executes PR-supplied scripts
 with write privileges.
 
-`security-events: read` covers code-scanning alerts only. Dependabot alerts need
-the separate `GITHUB_TOKEN` permission `vulnerability-alerts: read`, which this
-collector does not request yet, so its Dependabot source may show as unavailable.
-The dependency governance report requests it (see "Dependency governance"); adding
-it here is a separate follow-up. Alert 403/404 responses are shown as
-**unavailable**, not zero. The local baseline's authenticated user may see data
-the scheduled token cannot. No additional secret is requested to work around this. Code-scanning availability also depends on the enabled feature and token.
+`security-events: read` covers code-scanning alerts only; Dependabot alerts use
+the separate `GITHUB_TOKEN` permission `vulnerability-alerts: read`, now granted
+to the collector job (as in the dependency governance report; see "Dependency
+governance"). Alert 403/404 responses are still shown as **unavailable**, not
+zero, if the source or credential cannot provide them. The local baseline's
+authenticated user may see data the scheduled token cannot. No additional secret
+is requested to work around this. Code-scanning availability also depends on the
+enabled feature and token.
 
 Required-source failures, malformed/incomplete pagination, rate limits after
 bounded retries, and unknown deployment job mappings fail collection and preserve
