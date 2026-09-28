@@ -36,11 +36,17 @@ authority.
 
 The issue lifecycle router advances one `stage:*` label at a time. A transition
 must move forward exactly one stage or return to `stage:needs-spec`. The
+requirements gh-aw workflow handles the first transition by adding
+`stage:spec-ready` and removing `stage:needs-spec` through narrowly scoped safe
+outputs. Those `GITHUB_TOKEN` writes do not trigger the router; the issue must
+be left with exactly one stage label so the next human-applied
+`stage:spec-approved` label can be validated normally. The
 `stage:spec-approved` and `stage:plan-approved` labels are human gates: only a
 non-bot collaborator with write, maintain, or admin permission can apply them.
 The router removes invalid labels, explains allowed transitions, removes the
 previous stage after a valid transition, and comments with the next owner.
-Issue content is treated only as data; this workflow does not execute it.
+Issue content is treated only as untrusted data; workflows do not execute it
+or follow embedded instructions that redirect scope or expand permissions.
 
 The router keeps its token to `issues: write` and `contents: read` as required
 by the repository's least-privilege boundary. GitHub may deny the collaborator
@@ -51,7 +57,7 @@ Do not widen the workflow token without an explicit maintainer decision.
 ```mermaid
 stateDiagram-v2
     [*] --> NeedsSpec: issue opened / stage:needs-spec
-    NeedsSpec --> SpecReady: product-analyst posts requirements
+    NeedsSpec --> SpecReady: spec-agent posts requirements
     SpecReady --> SpecApproved: maintainer approves scope and acceptance criteria
     SpecApproved --> PlanReady: architect posts solution design
     PlanReady --> PlanApproved: maintainer approves design
@@ -69,7 +75,7 @@ stateDiagram-v2
 
 | Stage label | Owner / next action | Human gate |
 | --- | --- | --- |
-| `stage:needs-spec` | [`product-analyst`](../.github/agents/product-analyst.agent.md) prepares requirements. | Maintainer approves scope and acceptance criteria. |
+| `stage:needs-spec` | [`spec-agent`](../.github/workflows/spec-agent.md), following the [`product-analyst`](../.github/agents/product-analyst.agent.md) profile, prepares requirements. | Maintainer approves scope and acceptance criteria. |
 | `stage:spec-ready` | Maintainer reviews posted requirements. | Applying `stage:spec-approved` requires write, maintain, or admin permission. |
 | `stage:spec-approved` | [`architect`](../.github/agents/architect.agent.md) prepares the design. | Human accepts or rejects the design. |
 | `stage:plan-ready` | Maintainer reviews the design. | Applying `stage:plan-approved` requires write, maintain, or admin permission. |
@@ -1028,7 +1034,7 @@ Open the approved issue, assign it to **Copilot**, or use **Open in Copilot**. I
 
 ### 5. Workflow orchestration
 
-This repository runs two [GitHub Agentic Workflows](https://github.github.com/gh-aw/) (`gh-aw`), configured under `.github/workflows/`: an issue-triage workflow that comments on newly opened issues, and a weekly report workflow that opens a summary issue. Both are advisory only — they cannot self-approve, self-merge, or mutate issues without review. See [agentic-workflows.md](agentic-workflows.md) for what each workflow does and the `COPILOT_GITHUB_TOKEN` repository secret the owner must add before they can run.
+This repository runs three [GitHub Agentic Workflows](https://github.github.com/gh-aw/) (`gh-aw`), configured under `.github/workflows/`: issue triage comments on newly opened issues, the requirements spec agent advances eligible issues from `stage:needs-spec` to `stage:spec-ready`, and the weekly report opens a summary issue. The spec agent cannot apply approval labels; a maintainer reviews and applies `stage:spec-approved` before architecture work begins. See [agentic-workflows.md](agentic-workflows.md) for workflow behavior and the `COPILOT_GITHUB_TOKEN` repository secret required to run them.
 
 ### 6. Review governance and ownership routing
 
