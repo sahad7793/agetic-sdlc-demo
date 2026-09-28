@@ -16,6 +16,15 @@ Closes #
 - [ ] CI is green before I request review.
 - [ ] Any new NuGet package is justified in this description.
 
+## Design and threat-model review (when relevant)
+
+For API contract, data, identity, workflow permission, or deployment changes,
+use `docs/design-review.md` to summarize relevant risks and mitigations.
+Link an ADR from `docs/adr/` when the change merits a lasting architecture
+decision; otherwise state N/A. A human reviewer accepts the design.
+
+- ADR (if needed) and design/security impact:
+
 ## Ownership-sensitive changes
 
 <!-- See .github/CODEOWNERS for the exact routed paths. -->
