@@ -34,6 +34,8 @@ for the design, baseline lifecycle, and the manual, opt-in staging smoke mode.
 - **DTOs** define the API contract and validation boundary so EF entities are never returned directly.
 
 Read [docs/agentic-sdlc.md](docs/agentic-sdlc.md) for the complete issue-to-merge workflow and the repository settings the owner must enable.
+Read the [agent security policy](docs/agent-security-policy.md) for prompt-injection,
+least-privilege, and human-approval guardrails.
 For design changes, use the [ADR guide](docs/adr/README.md) and
 [human design review checklist](docs/design-review.md) in the pull request.
 
