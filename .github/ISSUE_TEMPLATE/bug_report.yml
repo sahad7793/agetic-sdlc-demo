@@ -1,7 +1,7 @@
 name: Bug report
 description: Report an incorrect behavior in the application or delivery workflow.
 title: "[Bug]: "
-labels: ["bug"]
+labels: ["bug", "stage:needs-spec"]
 body:
   - type: textarea
     id: summary

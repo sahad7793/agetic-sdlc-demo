@@ -1,7 +1,7 @@
 name: Feature request
 description: Propose a user-facing or internal capability for the Task Management API.
 title: "[Feature]: "
-labels: ["feature"]
+labels: ["feature", "stage:needs-spec"]
 body:
   - type: markdown
     attributes:

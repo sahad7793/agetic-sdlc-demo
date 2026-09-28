@@ -1,0 +1,52 @@
+{
+  "labels": [
+    {
+      "name": "stage:needs-spec",
+      "color": "D4C5F9",
+      "description": "Issue intake; product-analyst prepares requirements.",
+      "owner": "product-analyst agent"
+    },
+    {
+      "name": "stage:spec-ready",
+      "color": "BFD4F2",
+      "description": "Requirements are posted and awaiting maintainer approval.",
+      "owner": "maintainer (human approval of scope and acceptance criteria)"
+    },
+    {
+      "name": "stage:spec-approved",
+      "color": "0E8A16",
+      "description": "Requirements approved; architect prepares the solution design.",
+      "owner": "architect agent"
+    },
+    {
+      "name": "stage:plan-ready",
+      "color": "C2E0C6",
+      "description": "Solution design is posted and awaiting human approval.",
+      "owner": "maintainer (human approval of the design)"
+    },
+    {
+      "name": "stage:plan-approved",
+      "color": "1D76DB",
+      "description": "Design approved; implementation can begin.",
+      "owner": "Copilot coding agent or human implementer"
+    },
+    {
+      "name": "stage:in-progress",
+      "color": "FBCA04",
+      "description": "Implementation is underway; prepare focused verification.",
+      "owner": "test-engineer agent"
+    },
+    {
+      "name": "stage:in-review",
+      "color": "D93F0B",
+      "description": "Changes are ready for review by a human and reviewer agent.",
+      "owner": "reviewer agent and human reviewer"
+    },
+    {
+      "name": "stage:done",
+      "color": "5319E7",
+      "description": "Issue work is complete; human handles merge and release decisions.",
+      "owner": "human maintainer (merge); release-manager agent (draft notes after merge)"
+    }
+  ]
+}
