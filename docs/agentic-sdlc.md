@@ -355,15 +355,15 @@ runs against a deployed staging or production environment automatically.
   - `capture-baseline` is a **maintainer-run-only** helper, never invoked by
     any workflow, that turns one reviewed `summary.json` into a new,
     committed `baseline.json`.
-- **`tests/performance/baseline.json`** — ships as an explicit **bootstrap
-  placeholder** (`"status": "unset"`, empty `scenarios: {}`). It intentionally
-  contains **no invented latency/error/throughput numbers**. `perf_gate.py`
-  special-cases this: every row in the report reads "no baseline yet" and the
-  gate cannot fail, in either mode, until a human promotes a real baseline
-  (see below). The tolerance multipliers it will apply once a baseline exists
-  are documented in the file itself (`p95`/`p99` latency multipliers, a hard
-  error-rate cap, and a minimum-throughput multiplier) — deliberately
-  generous headroom bands, not production SLOs.
+- **`tests/performance/baseline.json`** — records a conservative reference
+  envelope from three reviewed CI-only runs. For each scenario, p50 is the
+  median of the three per-run medians; p95 and p99 are the respective maxima,
+  error rate is the maximum, and throughput is the minimum. The file records
+  source run IDs, commit SHAs, runner, k6 version, and profile. These are
+  observed values, not production SLOs or SLAs; lifecycle p95 varied from
+  13.77 to 152.30 ms across the three runs, so the small sample is explicitly
+  not considered stable enough for a blocking gate. The existing tolerance
+  multipliers remain headroom bands, not production targets.
 - **`.github/workflows/performance.yml`**:
   - `local-load-test` (pull requests touching the API/perf files, plus manual
     `workflow_dispatch`) builds the API, starts it as a background process on
@@ -388,26 +388,25 @@ runs against a deployed staging or production environment automatically.
   path, advisory-vs-strict exit codes, and `capture-baseline`. Wired into CI
   alongside the other `tests/*` contract suites.
 
-### Baseline lifecycle (why there's no number in `baseline.json` yet)
+### Baseline lifecycle
 
-1. **Now:** `baseline.json` ships `"status": "unset"`. The gate runs on every
-   relevant PR, always exits 0, and its report always says "no baseline yet".
-   This is intentionally not useful for catching regressions on day one — its
-   purpose right now is to prove the harness itself works end-to-end.
-2. **After a few real CI runs:** a maintainer reviews several
-   `perf-results/summary.json` artifacts from ordinary (non-regressed) PRs to
-   confirm they look stable and representative of the shared GitHub-hosted
-   runner, then picks one and runs, locally or by downloading the artifact:
-   `python3 scripts/perf_gate.py capture-baseline --from summary.json`. This
-   overwrites `tests/performance/baseline.json` with `"status": "set"` and the
-   observed p50/p95/p99/error-rate/throughput numbers, preserving the
-   existing tolerance multipliers. The maintainer reviews the diff and opens
-   it as its own PR — `capture-baseline` is never run by CI.
-3. **From then on:** `compare` has real numbers to check against. It keeps
-   running in `--mode advisory` (report-only) until there's enough
-   confidence in the baseline's stability to switch the workflow to
-   `--mode strict`, which is the point at which a genuine regression can fail
-   the job.
+1. **Current reference:** `baseline.json` contains the three-run envelope
+   summarized above. The source runs used the same `ubuntu-latest` runner,
+   k6 0.54.0 profile (5 VUs × 10 iterations per scenario), and ephemeral
+   local SQLite API; each passed 350/350 checks with zero scenario errors.
+   Staging was skipped in all three runs. The source run IDs and links are
+   recorded in the JSON.
+2. **Advisory only:** the workflow continues to invoke
+   `perf_gate.py compare --mode advisory`, which always exits 0, and no
+   required-check or ruleset behavior is changed. The recorded lifecycle p95
+   spread (13.77–152.30 ms) is a warning against interpreting three samples
+   as a stable performance guarantee. Do not switch to strict mode based on
+   this envelope alone.
+3. **Future revisions:** maintainers can review additional ordinary CI
+   artifacts and deliberately revise the envelope in a separate PR. The
+   `capture-baseline` helper captures one run; this multi-run envelope is
+   manually aggregated per the methodology recorded in `baseline.json`.
+   `capture-baseline` remains maintainer-run-only and is never run by CI.
 
 ### Security, permissions, and data-safety notes
 
