@@ -110,14 +110,24 @@ bodies. It accepts an issue reference (such as `Fixes #123`, `Closes #123`,
 line, or a Dependabot-authored PR. The exception lets humans document why a
 change has no tracking issue.
 
-This `pull_request` workflow has only `contents: read` and
-`pull-requests: read` permissions. It checks out the PR's base revision and
-passes the PR body to the checker as data; it does not check out or execute PR
-content. On the initial adoption PR, the trusted base may not yet contain the
-checker; in that case the workflow reports a notice and skips rather than
-running the PR's copy. The check is advisory by default and is **not** included
-in the repository ruleset's required checks. Making it required is an owner
-decision and requires an explicit ruleset change.
+This `pull_request` workflow has `contents: read`, `pull-requests: read`, and
+`issues: read` permissions. It checks out the PR's base revision and passes the
+PR body to the checker as data; it does not check out or execute PR content.
+For each parsed issue reference, the checker reads that issue's state and labels
+from GitHub and reports whether it has `stage:plan-approved`. A linked issue
+without that label receives an actionable warning to obtain human plan review;
+unavailable metadata is reported as unverifiable. The gate label is never
+inferred from PR text or written by this workflow. These are advisory
+annotations and a job summary only: missing approval never fails or blocks the
+PR, and missing or invalid issue references retain their existing behavior.
+For external repository URLs, the lookup is unauthenticated; if GitHub does
+not make the issue readable, the status is reported as unverifiable.
+
+On the initial adoption PR, the trusted base may not yet contain the checker;
+in that case the workflow reports a notice and skips rather than running the
+PR's copy. The check is advisory by default and is **not** included in the
+repository ruleset's required checks. Making it required is an owner decision
+and requires an explicit ruleset change.
 
 ## Delivery and deployment
 
