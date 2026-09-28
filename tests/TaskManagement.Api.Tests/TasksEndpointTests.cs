@@ -102,4 +102,142 @@ public class TasksEndpointTests(TaskApiFactory factory) : IClassFixture<TaskApiF
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         tasks.Should().ContainSingle(task => task.Title == "Overdue todo");
     }
+
+    [Fact]
+    public async Task GetAll_WithDueDateFilters_UsesExclusiveBoundsAndExcludesTasksWithoutDueDate()
+    {
+        await SeedTasksAsync(
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "Before cutoff",
+                DueDate = new DateTime(1999, 12, 31),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "At cutoff",
+                DueDate = new DateTime(2000, 1, 1),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "After cutoff",
+                DueDate = new DateTime(2000, 1, 2),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "No due date",
+                DueDate = null,
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "After future cutoff",
+                DueDate = new DateTime(2100, 1, 2),
+                CreatedAt = DateTime.UtcNow
+            });
+
+        var client = factory.CreateClient();
+        var beforeResponse = await client.GetAsync("/api/tasks?dueBefore=2000-01-01T00:00:00Z");
+        var beforeTasks = await beforeResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var afterResponse = await client.GetAsync("/api/tasks?dueAfter=2099-01-01T00:00:00Z");
+        var afterTasks = await afterResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+
+        beforeResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        beforeTasks!.Select(task => task.Title).Should().Contain("Before cutoff");
+        beforeTasks!.Select(task => task.Title).Should().NotContain("At cutoff", "After cutoff", "No due date");
+        afterResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        afterTasks!.Select(task => task.Title).Should().Contain("After future cutoff");
+        afterTasks!.Select(task => task.Title).Should().NotContain("At cutoff", "No due date");
+    }
+
+    [Fact]
+    public async Task GetAll_WithStatusAndDateRange_AppliesAllFiltersAndReturnsEmptyForImpossibleRange()
+    {
+        await SeedTasksAsync(
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "Matching range and status",
+                Status = TaskItemStatus.Todo,
+                DueDate = new DateTime(2102, 1, 1),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "At lower bound",
+                Status = TaskItemStatus.Todo,
+                DueDate = new DateTime(2101, 1, 1),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "At upper bound",
+                Status = TaskItemStatus.Todo,
+                DueDate = new DateTime(2103, 1, 1),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "Wrong status",
+                Status = TaskItemStatus.Done,
+                DueDate = new DateTime(2102, 1, 1),
+                CreatedAt = DateTime.UtcNow
+            },
+            new TaskItem
+            {
+                Id = Guid.NewGuid(),
+                Title = "No due date",
+                Status = TaskItemStatus.Todo,
+                DueDate = null,
+                CreatedAt = DateTime.UtcNow
+            });
+
+        var client = factory.CreateClient();
+        var response = await client.GetAsync(
+            "/api/tasks?status=Todo&dueAfter=2101-01-01T00:00:00Z&dueBefore=2103-01-01T00:00:00Z");
+        var tasks = await response.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var impossibleRangeResponse = await client.GetAsync(
+            "/api/tasks?dueAfter=2102-01-01T00:00:00Z&dueBefore=2102-01-01T00:00:00Z");
+        var impossibleRangeTasks =
+            await impossibleRangeResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var invertedRangeResponse = await client.GetAsync(
+            "/api/tasks?dueAfter=2103-01-01T00:00:00Z&dueBefore=2102-01-01T00:00:00Z");
+        var invertedRangeTasks =
+            await invertedRangeResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        tasks.Should().ContainSingle(task => task.Title == "Matching range and status");
+        impossibleRangeResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        impossibleRangeTasks.Should().BeEmpty();
+        invertedRangeResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        invertedRangeTasks.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAll_WithMalformedDueDate_ReturnsBadRequest()
+    {
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/tasks?dueBefore=not-a-date");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    private async Task SeedTasksAsync(params TaskItem[] tasks)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var database = scope.ServiceProvider.GetRequiredService<TaskManagementDbContext>();
+        database.Tasks.AddRange(tasks);
+        await database.SaveChangesAsync();
+    }
 }

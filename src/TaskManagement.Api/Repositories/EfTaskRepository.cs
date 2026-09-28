@@ -6,12 +6,26 @@ namespace TaskManagement.Api.Repositories;
 
 public class EfTaskRepository(TaskManagementDbContext database) : ITaskRepository
 {
-    public async Task<IReadOnlyList<TaskItem>> GetAllAsync(TaskItemStatus? status, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<TaskItem>> GetAllAsync(
+        TaskItemStatus? status,
+        DateTime? dueBefore,
+        DateTime? dueAfter,
+        CancellationToken cancellationToken)
     {
         IQueryable<TaskItem> query = database.Tasks.AsNoTracking().OrderByDescending(task => task.CreatedAt);
         if (status is not null)
         {
             query = query.Where(task => task.Status == status);
+        }
+
+        if (dueBefore is not null)
+        {
+            query = query.Where(task => task.DueDate.HasValue && task.DueDate.Value < dueBefore.Value);
+        }
+
+        if (dueAfter is not null)
+        {
+            query = query.Where(task => task.DueDate.HasValue && task.DueDate.Value > dueAfter.Value);
         }
 
         return await query.ToListAsync(cancellationToken);
