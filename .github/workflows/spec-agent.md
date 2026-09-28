@@ -1,7 +1,9 @@
 ---
 on:
-  issues:
-    types: [labeled]
+  label_command:
+    names: [stage:needs-spec]
+    events: [issues]
+    remove_label: false
 
 permissions:
   contents: read
@@ -20,7 +22,6 @@ safe-outputs:
     target: triggering
   add-labels:
     allowed: [stage:spec-ready]
-    required-labels: [stage:needs-spec]
     issues: true
     pull-requests: false
     max: 1
@@ -43,9 +44,8 @@ scope and acceptance criteria are approved.
 
 ## Applicability and evidence
 
-1. Continue only for an `issues.labeled` event whose newly added label is
-   `stage:needs-spec`. For any other label event, call `noop` with a short
-   reason.
+1. Continue only when activated by the `stage:needs-spec` label command. For
+   any other event or label, call `noop` with a short reason.
 2. Read the current issue and its relevant comments from this repository.
    Confirm the issue is open, still has `stage:needs-spec`, and has no later
    lifecycle stage label (`stage:spec-ready` or any stage after it). If any
@@ -101,13 +101,13 @@ List decisions that need the reporter or maintainer, or state "None identified."
 
 Describe focused unit and integration tests; do not write or change tests.
 
-End with this maintainer handoff: **Review these requirements and apply
-`stage:spec-approved` to approve them, or edit/return the issue to
-`stage:needs-spec` for revision.**
+End with a neutral maintainer-review handoff. Do not mention labels, claim a
+lifecycle transition, or name the next owner; the lifecycle router posts those
+messages.
 
 After the comment is produced, use only the configured safe outputs: add
 `stage:spec-ready` and remove `stage:needs-spec`, each at most once and only
 on the triggering issue. Do not apply any other label, especially either
-approval label. Both outputs require `stage:needs-spec` to still be present.
-`GITHUB_TOKEN` label changes do not trigger another workflow run, so this
-workflow itself completes the intake-to-spec-ready transition.
+approval label. The add-label output has no source-label precondition, so it
+can run after source-label removal. The remove-label output remains restricted
+to `stage:needs-spec` and requires that source label to still be present.

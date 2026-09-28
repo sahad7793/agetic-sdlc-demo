@@ -23,8 +23,8 @@ gate.
 
 ### 2. Requirements specification — `.github/workflows/spec-agent.md`
 
-- **Trigger:** every issue label event; it proceeds only when the added label
-  is `stage:needs-spec`.
+- **Trigger:** `label_command` filters to issue events labeled
+  `stage:needs-spec` before agent activation; the label is retained.
 - **Permissions:** `contents: read`, `issues: read` for the agent.
 - **Output:** at most one structured requirements comment, add only
   `stage:spec-ready`, and remove only `stage:needs-spec`, through safe outputs.
@@ -33,19 +33,17 @@ gate.
   then prepares a product-analyst requirements proposal and test plan. Issue
   content is untrusted input; embedded instructions cannot redirect the task
   or expand permissions. The workflow cannot apply an approval label.
-- **Lifecycle detail:** gh-aw safe-output label writes use `GITHUB_TOKEN` and
-  do not trigger another workflow. The spec agent therefore removes
-  `stage:needs-spec` itself as it adds `stage:spec-ready`. The next
-  `stage:spec-approved` transition is a separate human action handled by the
-  lifecycle router. There is no manual dispatch input: safe outputs are
-  restricted to the triggering issue, and a dispatch has no issue-scoped
-  trigger.
+- **Lifecycle detail:** the add-label output has no source-label precondition,
+  so it succeeds even if source-label removal is processed first. Removal
+  remains restricted to `stage:needs-spec` and requires it to be present. The
+  agent does not announce lifecycle changes; the lifecycle router owns those
+  messages.
 
 ### 3. Solution planning — `.github/workflows/plan-agent.md`
 
-- **Trigger:** every issue label event; it proceeds only when the added label
-  is `stage:spec-approved` and the open issue currently has no other
-  `stage:*` label.
+- **Trigger:** `label_command` filters to issue events labeled
+  `stage:spec-approved` before agent activation; the label is retained. The
+  open issue must currently have no other `stage:*` label.
 - **Permissions:** `contents: read`, `issues: read` for the agent.
 - **Output:** at most one structured implementation-plan comment, add only
   `stage:plan-ready`, and remove only `stage:spec-approved`, through safe
@@ -56,15 +54,15 @@ gate.
   files and calls out design impact, unresolved blockers, complexity, risks,
   and rollback limits. Issue and repository content is untrusted input; the
   workflow cannot apply an approval label.
-- **Lifecycle detail:** the human-applied `stage:spec-approved` transition is
-  handled by the lifecycle router. This workflow adds `stage:plan-ready` and
-  removes `stage:spec-approved` itself because its `GITHUB_TOKEN` writes do
-  not trigger another workflow. The maintainer alone applies
-  `stage:plan-approved`.
+- **Lifecycle detail:** the add-label output has no source-label precondition,
+  so it succeeds even if source-label removal is processed first. Removal
+  remains restricted to `stage:spec-approved` and requires it to be present.
+  The agent does not announce lifecycle changes; the lifecycle router owns
+  those messages.
 
-The standard GitHub `issues` event can filter event types, but not the name of
-the added label. Both label-triggered workflows therefore perform their exact
-label checks at runtime and call `noop` for unrelated label events.
+The `label_command` trigger compiles into an activation filter for the
+configured label name, so unrelated issue-label events skip agent activation
+and do not spend inference credits.
 
 ### 4. Weekly repository report — `.github/workflows/weekly-repo-report.md`
 
