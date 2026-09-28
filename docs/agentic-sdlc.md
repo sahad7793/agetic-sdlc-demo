@@ -20,7 +20,7 @@ human approvals.
 | Lifecycle stage | Agent | Human gate |
 | --- | --- | --- |
 | Issue intake and requirements | [`product-analyst`](../.github/agents/product-analyst.agent.md) | Maintainer approves scope and acceptance criteria before implementation. |
-| Solution design | [`architect`](../.github/agents/architect.agent.md) | Human reviewer accepts or rejects the Proposed ADR and design before implementation. |
+| Solution design | [`plan-agent`](../.github/workflows/plan-agent.md), following the [`architect`](../.github/agents/architect.agent.md) profile | Human reviewer accepts or rejects the design and any Proposed ADR before implementation. |
 | Implementation verification | [`test-engineer`](../.github/agents/test-engineer.agent.md) | Human author/reviewer verifies test intent and CI results. |
 | Pull request review | [`reviewer`](../.github/agents/reviewer.agent.md) | Human reviewer decides findings and provides required approval; agents never approve or merge. |
 | Security review | [`security-reviewer`](../.github/agents/security-reviewer.agent.md) | Maintainer reviews findings and approves any security-sensitive remediation. |
@@ -40,7 +40,9 @@ requirements gh-aw workflow handles the first transition by adding
 `stage:spec-ready` and removing `stage:needs-spec` through narrowly scoped safe
 outputs. Those `GITHUB_TOKEN` writes do not trigger the router; the issue must
 be left with exactly one stage label so the next human-applied
-`stage:spec-approved` label can be validated normally. The
+`stage:spec-approved` label can be validated normally. The planning gh-aw
+workflow then posts a code-grounded design, adds `stage:plan-ready`, and
+removes `stage:spec-approved` itself for the same reason. The
 `stage:spec-approved` and `stage:plan-approved` labels are human gates: only a
 non-bot collaborator with write, maintain, or admin permission can apply them.
 The router removes invalid labels, explains allowed transitions, removes the
@@ -59,7 +61,7 @@ stateDiagram-v2
     [*] --> NeedsSpec: issue opened / stage:needs-spec
     NeedsSpec --> SpecReady: spec-agent posts requirements
     SpecReady --> SpecApproved: maintainer approves scope and acceptance criteria
-    SpecApproved --> PlanReady: architect posts solution design
+    SpecApproved --> PlanReady: plan-agent posts solution design
     PlanReady --> PlanApproved: maintainer approves design
     PlanApproved --> InProgress: Copilot coding agent or human starts implementation
     InProgress --> InReview: test-engineer verifies / implementation is ready
@@ -77,7 +79,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | `stage:needs-spec` | [`spec-agent`](../.github/workflows/spec-agent.md), following the [`product-analyst`](../.github/agents/product-analyst.agent.md) profile, prepares requirements. | Maintainer approves scope and acceptance criteria. |
 | `stage:spec-ready` | Maintainer reviews posted requirements. | Applying `stage:spec-approved` requires write, maintain, or admin permission. |
-| `stage:spec-approved` | [`architect`](../.github/agents/architect.agent.md) prepares the design. | Human accepts or rejects the design. |
+| `stage:spec-approved` | [`plan-agent`](../.github/workflows/plan-agent.md), following the [`architect`](../.github/agents/architect.agent.md) profile, prepares the design. | Human accepts or rejects the design. |
 | `stage:plan-ready` | Maintainer reviews the design. | Applying `stage:plan-approved` requires write, maintain, or admin permission. |
 | `stage:plan-approved` | Copilot coding agent or human implementer begins work. | Human-approved issue defines implementation scope. |
 | `stage:in-progress` | [`test-engineer`](../.github/agents/test-engineer.agent.md) prepares focused verification. | Human author/reviewer verifies test intent and CI. |

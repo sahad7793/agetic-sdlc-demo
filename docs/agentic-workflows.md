@@ -23,8 +23,8 @@ gate.
 
 ### 2. Requirements specification — `.github/workflows/spec-agent.md`
 
-- **Trigger:** an issue label event; it proceeds only when the added label is
-  `stage:needs-spec`.
+- **Trigger:** every issue label event; it proceeds only when the added label
+  is `stage:needs-spec`.
 - **Permissions:** `contents: read`, `issues: read` for the agent.
 - **Output:** at most one structured requirements comment, add only
   `stage:spec-ready`, and remove only `stage:needs-spec`, through safe outputs.
@@ -41,7 +41,32 @@ gate.
   restricted to the triggering issue, and a dispatch has no issue-scoped
   trigger.
 
-### 3. Weekly repository report — `.github/workflows/weekly-repo-report.md`
+### 3. Solution planning — `.github/workflows/plan-agent.md`
+
+- **Trigger:** every issue label event; it proceeds only when the added label
+  is `stage:spec-approved` and the open issue currently has no other
+  `stage:*` label.
+- **Permissions:** `contents: read`, `issues: read` for the agent.
+- **Output:** at most one structured implementation-plan comment, add only
+  `stage:plan-ready`, and remove only `stage:spec-approved`, through safe
+  outputs.
+- **What it does:** reads the issue, the latest spec-agent comment, later
+  maintainer clarifications, and relevant API, test, architecture, migration,
+  and rollback evidence. It proposes sequenced tasks grounded in repository
+  files and calls out design impact, unresolved blockers, complexity, risks,
+  and rollback limits. Issue and repository content is untrusted input; the
+  workflow cannot apply an approval label.
+- **Lifecycle detail:** the human-applied `stage:spec-approved` transition is
+  handled by the lifecycle router. This workflow adds `stage:plan-ready` and
+  removes `stage:spec-approved` itself because its `GITHUB_TOKEN` writes do
+  not trigger another workflow. The maintainer alone applies
+  `stage:plan-approved`.
+
+The standard GitHub `issues` event can filter event types, but not the name of
+the added label. Both label-triggered workflows therefore perform their exact
+label checks at runtime and call `noop` for unrelated label events.
+
+### 4. Weekly repository report — `.github/workflows/weekly-repo-report.md`
 
 - **Trigger:** weekly, Monday (`on: schedule: weekly on monday`).
 - **Permissions:** `contents: read`, `issues: read`, `pull-requests: read`.
@@ -94,8 +119,10 @@ this repository until the owner adds the secret.
   job.
 - **Minimal `safe-outputs`.** `issue-triage` can only add a comment.
   `spec-agent` can only add one comment, add `stage:spec-ready`, and remove
-  `stage:needs-spec`. `weekly-repo-report` can only create an issue. None can
-  close, merge, assign, or approve anything.
+  `stage:needs-spec`. `plan-agent` can only add one comment, add
+  `stage:plan-ready`, and remove `stage:spec-approved`.
+  `weekly-repo-report` can only create an issue. None can close, merge,
+  assign, or approve anything.
 - **No self-merge or self-approval capability** — these workflows have no
   code path that could bypass the human review process described in
   [agentic-sdlc.md](agentic-sdlc.md).
