@@ -221,5 +221,40 @@ class CaptureBaselineTests(unittest.TestCase):
                 args.func(args)
 
 
+class CommittedBaselineTests(unittest.TestCase):
+    def test_three_run_reference_is_populated_and_advisory(self):
+        baseline = perf_gate.load_json(ROOT / "tests/performance/baseline.json")
+
+        self.assertEqual(baseline["status"], "set")
+        self.assertEqual(baseline["sample_count"], 3)
+        self.assertEqual(
+            [run["id"] for run in baseline["source_runs"]],
+            [36131671243, 36132882154, 36133185846],
+        )
+        self.assertEqual(
+            baseline["scenarios"],
+            {
+                "reads": {
+                    "p50_ms": 1.98,
+                    "p95_ms": 94.03,
+                    "p99_ms": 395.15,
+                    "error_rate": 0.0,
+                    "requests_per_s": 35.775,
+                },
+                "lifecycle": {
+                    "p50_ms": 2.10,
+                    "p95_ms": 152.30,
+                    "p99_ms": 496.12,
+                    "error_rate": 0.0,
+                    "requests_per_s": 47.700,
+                },
+            },
+        )
+
+        observed = perf_gate.extract_metrics(make_summary(reads_p95=500.0))
+        rows = perf_gate.evaluate(observed, baseline)
+        self.assertEqual(perf_gate.decide_exit_code(rows, "advisory"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

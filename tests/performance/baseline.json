@@ -1,16 +1,73 @@
 {
   "schema_version": 1,
-  "status": "unset",
-  "notes": "Bootstrap placeholder. No numbers here are real measurements or invented SLOs. perf_gate.py treats status=unset as report-only (always exits 0) and never compares against the empty scenario data below. A maintainer must review a few real advisory runs of .github/workflows/performance.yml on ubuntu-latest, then run `python3 scripts/perf_gate.py capture-baseline --from <a reviewed perf-results/summary.json> --out tests/performance/baseline.json` to replace this file with a real, reviewed baseline in a follow-up PR. See docs/agentic-sdlc.md for the full lifecycle.",
-  "captured_at": null,
+  "status": "set",
+  "notes": "Advisory engineering reference envelope derived from three reviewed CI-only runs, not a production SLO or SLA. Lifecycle p95 varied substantially between runs; keep comparison advisory and gather more samples before considering any stricter use.",
+  "captured_at": "2026-09-28T10:45:25Z",
   "git_sha": null,
   "captured_by": null,
-  "runner": null,
+  "runner": "GitHub Actions ubuntu-latest",
+  "sample_count": 3,
+  "profile": {
+    "workflow": ".github/workflows/performance.yml",
+    "k6_version": "0.54.0",
+    "vus_per_scenario": 5,
+    "iterations_per_vu": 10,
+    "api_backend": "ephemeral local API with SQLite",
+    "checks_passed_per_run": 350,
+    "checks_failed_per_run": 0,
+    "staging_job": "skipped"
+  },
+  "aggregation": {
+    "p50_ms": "median of the three per-run medians",
+    "p95_ms": "maximum of the three per-run p95 values",
+    "p99_ms": "maximum of the three per-run p99 values",
+    "error_rate": "maximum of the three per-run error rates",
+    "requests_per_s": "minimum of the three per-run rates (count / k6 testRunDurationMs)",
+    "lifecycle_p95_observed_range_ms": [
+      13.77,
+      152.30
+    ]
+  },
+  "source_runs": [
+    {
+      "id": 36131671243,
+      "url": "https://github.com/sahad7793/agetic-sdlc-demo/actions/runs/36131671243",
+      "head_sha": "bc3178e1dc9443bd20f917f81ff1e590414c85cc",
+      "created_at": "2026-09-25T11:51:20Z"
+    },
+    {
+      "id": 36132882154,
+      "url": "https://github.com/sahad7793/agetic-sdlc-demo/actions/runs/36132882154",
+      "head_sha": "bc8d7a0c3d0067893e05d4ea7fe50eecc2e1c129",
+      "created_at": "2026-09-25T12:04:38Z"
+    },
+    {
+      "id": 36133185846,
+      "url": "https://github.com/sahad7793/agetic-sdlc-demo/actions/runs/36133185846",
+      "head_sha": "ecfe3a8048f9f49caa1e75b0ca68758b893f110b",
+      "created_at": "2026-09-25T12:07:54Z"
+    }
+  ],
   "tolerance": {
     "p95_latency_ms_multiplier": 1.5,
     "p99_latency_ms_multiplier": 1.75,
     "error_rate_max": 0.0,
     "throughput_min_multiplier": 0.7
   },
-  "scenarios": {}
+  "scenarios": {
+    "reads": {
+      "p50_ms": 1.98,
+      "p95_ms": 94.03,
+      "p99_ms": 395.15,
+      "error_rate": 0.0,
+      "requests_per_s": 35.775
+    },
+    "lifecycle": {
+      "p50_ms": 2.10,
+      "p95_ms": 152.30,
+      "p99_ms": 496.12,
+      "error_rate": 0.0,
+      "requests_per_s": 47.700
+    }
+  }
 }
