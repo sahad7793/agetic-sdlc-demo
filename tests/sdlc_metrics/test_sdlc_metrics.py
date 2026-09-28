@@ -177,6 +177,23 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(report["inventory_at_collection"]["alerts"]["codeql"]["states"], {"fixed": 1})
         self.assertIsNone(report["current"]["alerts"]["dependabot"]["events"])
 
+    def test_dependabot_403_is_unavailable_not_zero(self):
+        api = FakeApi([
+            ({"created_at": START}, {}),
+            *[({"workflow_runs": [], "total_count": 0}, {}) for _ in range(4)],
+            ([], {}),
+            metrics.ApiError(403, "dependabot/alerts"),
+        ])
+        with patch.object(metrics, "collect_prs", return_value=[]):
+            result = metrics.collect(api, REPOSITORY, END, "abc")
+
+        dependabot = result["alerts"]["dependabot"]
+        self.assertFalse(dependabot["available"])
+        self.assertEqual(dependabot["items"], [])
+        report = metrics.build_report(result)
+        self.assertIsNone(report["current"]["alerts"]["dependabot"]["events"])
+        self.assertIn("HTTP 403", metrics.render(report))
+
     def test_render_is_deterministic_and_does_not_hide_missing_data(self):
         report = metrics.build_report(evidence(), baseline=True)
         output = metrics.render(report)
