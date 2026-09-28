@@ -16,9 +16,10 @@ import urllib.error
 import urllib.request
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 API_ROOT = "https://api.github.com"
 DASHBOARD_MARKER = "<!-- sdlc-metrics-dashboard:v1 -->"
+DEFECT_ATTRIBUTION_DAYS = 30
 # Deliberate allowlist: rollback.yml is recovery, not a regular delivery operation.
 WORKFLOWS = {
     "ci": "ci.yml",
@@ -140,7 +141,8 @@ class GitHub:
 
 
 def collect_prs(api, owner, name):
-    fields = """number createdAt mergedAt state baseRefName author { login }
+    fields = """number title createdAt mergedAt state baseRefName author { login __typename }
+        mergedBy { login }
         closingIssuesReferences(first:100) {
           nodes { number createdAt repository { nameWithOwner } }
           pageInfo { hasNextPage endCursor }
@@ -187,6 +189,9 @@ def collect_prs(api, owner, name):
                 "merged_at": pr["mergedAt"], "state": pr["state"],
                 "base": pr["baseRefName"],
                 "author": pr["author"]["login"] if pr["author"] else None,
+                "author_is_bot": bool(pr["author"] and pr["author"]["__typename"] == "Bot"),
+                "is_revert": pr["title"].lower().startswith("revert"),
+                "merged_by": pr["mergedBy"]["login"] if pr["mergedBy"] else None,
                 "issues": [{"number": issue["number"], "created_at": issue["createdAt"],
                             "repository": issue["repository"]["nameWithOwner"]} for issue in issues],
             })
@@ -199,19 +204,90 @@ def collect_prs(api, owner, name):
     return prs
 
 
+def collect_recent_pr_activity(api, repository, prs, collected_at):
+    root = f"repos/{repository}"
+    end = timestamp(collected_at)
+    start = end.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=14)
+    for pr in prs:
+        if not any(within(pr[field], iso(start), collected_at)
+                   for field in ("created_at", "merged_at")):
+            continue
+        reviews = api.pages(f"{root}/pulls/{pr['number']}/reviews")
+        commits = api.pages(f"{root}/pulls/{pr['number']}/commits")
+        pr["reviews"] = [{
+            "state": review["state"], "submitted_at": review["submitted_at"],
+            "commit_id": review["commit_id"],
+            "user": review["user"]["login"] if review.get("user") else None,
+        } for review in reviews if review.get("submitted_at")]
+        pr["commits"] = [{
+            "sha": commit["sha"], "committed_at": commit["commit"]["committer"]["date"],
+            "copilot_coauthored": bool(re.search(
+                r"(?im)^Co-authored-by:\s*.*\bCopilot\b", commit["commit"]["message"]
+            )),
+        } for commit in commits]
+
+
+def collect_defect_issues(api, repository, collected_at):
+    root = f"repos/{repository}"
+    since = iso(timestamp(collected_at).replace(hour=0, minute=0, second=0, microsecond=0)
+                - timedelta(days=14))
+    issues = api.pages(f"{root}/issues?state=all&since={since}")
+    result = []
+    for issue in issues:
+        if "pull_request" in issue:
+            continue
+        labels = sorted({
+            label["name"].strip().lower() for label in issue.get("labels", [])
+            if isinstance(label, dict) and isinstance(label.get("name"), str)
+        })
+        if "bug" in labels or {"incident", "sev1", "sev2", "sev3", "sev4"} & set(labels):
+            references_available = True
+            referenced_pr_numbers = set()
+            try:
+                timeline = api.pages(f"{root}/issues/{issue['number']}/timeline")
+            except ApiError as error:
+                if error.status not in {403, 404}:
+                    raise
+                references_available = False
+            else:
+                prefix = f"https://github.com/{repository}/pull/"
+                for event in timeline:
+                    source = event.get("source")
+                    source_issue = source.get("issue") if isinstance(source, dict) else None
+                    if not isinstance(source_issue, dict) or not source_issue.get("pull_request"):
+                        continue
+                    url = source_issue.get("html_url", "")
+                    match = re.fullmatch(re.escape(prefix) + r"(\d+)", url, re.IGNORECASE)
+                    if match:
+                        referenced_pr_numbers.add(int(match.group(1)))
+            result.append({
+                "number": issue["number"], "created_at": issue["created_at"],
+                "labels": labels, "references_available": references_available,
+                "referenced_pr_numbers": sorted(referenced_pr_numbers),
+            })
+    return result
+
+
 def collect(api, repository, collected_at, collector_commit):
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository),
             "Expected owner/repository")
     owner, name = repository.split("/")
     root = f"repos/{repository}"
     metadata, _ = api.request(root)
+    activity_start = iso(
+        timestamp(collected_at).replace(hour=0, minute=0, second=0, microsecond=0)
+        - timedelta(days=14)
+    )
     evidence = {
         "schema_version": SCHEMA_VERSION, "repository": repository,
         "repository_created_at": metadata["created_at"],
         "collected_at": collected_at, "collector_commit": collector_commit,
-        "prs": collect_prs(api, owner, name), "attempts": [], "deployment_jobs": [],
-        "alerts": {},
+        "pr_activity_available_from": activity_start, "issues_available_from": activity_start,
+        "prs": collect_prs(api, owner, name), "issues": [], "attempts": [],
+        "deployment_jobs": [], "alerts": {},
     }
+    collect_recent_pr_activity(api, repository, evidence["prs"], collected_at)
+    evidence["issues"] = collect_defect_issues(api, repository, collected_at)
     for kind, path in WORKFLOWS.items():
         runs = api.pages(f"{root}/actions/workflows/{path}/runs", "workflow_runs")
         require(len({run["id"] for run in runs}) == len(runs), f"Duplicate runs for {path}")
@@ -224,6 +300,12 @@ def collect(api, repository, collected_at, collector_commit):
                     "event": attempt["event"], "branch": attempt["head_branch"],
                     "started_at": attempt["run_started_at"], "status": attempt["status"],
                     "conclusion": attempt["conclusion"],
+                    "run_url": run.get("html_url"),
+                    "actor": run["actor"]["login"] if run.get("actor") else None,
+                    "pull_request_numbers": sorted({
+                        item["number"] for item in run.get("pull_requests", [])
+                        if isinstance(item.get("number"), int)
+                    }),
                 })
                 if kind == "deploy":
                     for job in api.pages(f"{endpoint}/jobs", "jobs"):
@@ -287,16 +369,167 @@ def durations(values):
     return {"samples": len(values), "median_hours": round(statistics.median(values), 3) if values else None}
 
 
+def medians(values):
+    return {"samples": len(values), "median": round(statistics.median(values), 3) if values else None}
+
+
 def hours(start, end):
     return (timestamp(end) - timestamp(start)).total_seconds() / 3600
 
 
 def author_group(pr):
+    if pr["author"] is None:
+        return "unknown"
     if pr["author"] in {"dependabot", "dependabot[bot]"}:
         return "dependabot"
     if pr["author"] in {"copilot-swe-agent", "copilot-swe-agent[bot]"}:
         return "copilot_authored"
     return "other_or_unknown"
+
+
+def authorship(pr):
+    login = (pr["author"] or "").lower()
+    if (pr.get("author_is_bot") or login.endswith("[bot]")
+            or login in {"dependabot", "github-actions"} or "copilot" in login):
+        return "agent"
+    if any(commit.get("copilot_coauthored") for commit in pr.get("commits", [])):
+        return "agent"
+    return "human" if pr["author"] else "unknown"
+
+
+def issue_categories(issue):
+    labels = set(issue["labels"])
+    return {
+        "bug": "bug" in labels,
+        "incident": bool(labels & {"incident", "sev1", "sev2", "sev3", "sev4"}),
+    }
+
+
+def rework_metrics(prs):
+    valid_review_states = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+    rounds = []
+    changes_requested = []
+    commits_after_review = []
+    per_pr = []
+    for pr in prs:
+        reviews = [review for review in pr.get("reviews", [])
+                   if review["state"] in valid_review_states]
+        rounds.append(len(reviews))
+        requested = sum(review["state"] == "CHANGES_REQUESTED" for review in reviews)
+        changes_requested.append(requested)
+        commits_count = None
+        if reviews:
+            first_review = min(reviews, key=lambda review: timestamp(review["submitted_at"]))
+            commits = pr.get("commits", [])
+            head_index = next((index for index, commit in enumerate(commits)
+                               if commit["sha"] == first_review["commit_id"]), None)
+            if head_index is not None:
+                commits_count = max(0, len(commits) - head_index - 1)
+                commits_after_review.append(commits_count)
+        per_pr.append({
+            "number": pr["number"], "author": pr["author"], "authorship": authorship(pr),
+            "review_rounds": len(reviews), "changes_requested_reviews": requested,
+            "commits_after_first_review": commits_count, "is_revert": pr["is_revert"],
+        })
+    return {
+        "merged_prs": len(prs),
+        "review_rounds": medians(rounds),
+        "changes_requested_reviews": medians(changes_requested),
+        "commits_after_first_review": medians(commits_after_review),
+        "commits_after_first_review_unavailable": sum(item["commits_after_first_review"] is None
+                                                       for item in per_pr),
+        "pr_title_starts_with_revert": sum(pr["is_revert"] for pr in prs),
+        "per_merged_pr": per_pr,
+    }
+
+
+def escaped_defect_metrics(evidence, selected, merged, start, end):
+    if timestamp(start) < timestamp(evidence.get("issues_available_from", start)):
+        return {
+            "available": False,
+            "reason": "Labeled issue evidence is retained for the last 14 days",
+        }
+    issues = [issue for issue in evidence.get("issues", []) if within(issue["created_at"], start, end)]
+    categories = {issue["number"]: issue_categories(issue) for issue in issues}
+    opened = {
+        "bugs": sum(categories[number]["bug"] for number in categories),
+        "incidents": sum(categories[number]["incident"] for number in categories),
+        "unique_issues": len(issues),
+    }
+    references_available = all(issue.get("references_available", True) for issue in issues)
+    counts = {
+        group: {"bugs": 0, "incidents": 0, "unique_issues": 0, "merged_prs": 0}
+        for group in ("agent", "human", "unknown")
+    }
+    pr_counts = {
+        pr["number"]: {"bugs": 0, "incidents": 0, "unique_issues": 0, "attribution": set()}
+        for pr in selected
+    }
+    selected_by_number = {pr["number"]: pr for pr in selected}
+    attributed_issues = set()
+    for issue in issues:
+        prior = [pr for pr in merged
+                 if timestamp(pr["merged_at"]) < timestamp(issue["created_at"])]
+        explicit_numbers = set(issue.get("referenced_pr_numbers", []))
+        explicit_numbers.update(
+            pr["number"] for pr in selected
+            if any(link["number"] == issue["number"]
+                   and link["repository"].lower() == evidence["repository"].lower()
+                   for link in pr["issues"])
+        )
+        explicit = [
+            pr for pr in selected
+            if pr["number"] in explicit_numbers
+            and timestamp(pr["merged_at"]) < timestamp(issue["created_at"])
+        ]
+        if explicit:
+            attributed = max(explicit, key=lambda pr: timestamp(pr["merged_at"]))
+            method = "explicit_closing_issue_reference"
+        else:
+            recent = [pr for pr in prior
+                      if hours(pr["merged_at"], issue["created_at"]) <= DEFECT_ATTRIBUTION_DAYS * 24]
+            if not recent:
+                continue
+            attributed = max(recent, key=lambda pr: timestamp(pr["merged_at"]))
+            method = "heuristic_30_day_temporal_proximity"
+        if attributed["number"] not in selected_by_number:
+            continue
+        category = categories[issue["number"]]
+        pr_result = pr_counts[attributed["number"]]
+        pr_result["bugs"] += category["bug"]
+        pr_result["incidents"] += category["incident"]
+        pr_result["unique_issues"] += 1
+        pr_result["attribution"].add(method)
+        attributed_issues.add(issue["number"])
+    per_pr = []
+    for pr in selected:
+        result = pr_counts[pr["number"]]
+        group = authorship(pr)
+        group_counts = counts[group]
+        group_counts["merged_prs"] += 1
+        for field in ("bugs", "incidents", "unique_issues"):
+            group_counts[field] += result[field]
+        per_pr.append({
+            "number": pr["number"], "author": pr["author"], "authorship": group,
+            "bugs": result["bugs"], "incidents": result["incidents"],
+            "unique_issues": result["unique_issues"],
+            "attribution": sorted(result["attribution"]) or ["none"],
+        })
+    return {
+        "available": True,
+        "references_available": references_available,
+        "opened": opened,
+        "by_authorship": counts,
+        "per_merged_pr": per_pr,
+        "unattributed_issues": len(set(categories) - attributed_issues),
+        "attribution_window_days": DEFECT_ATTRIBUTION_DAYS,
+        "attribution_method": (
+            ("Explicit issue-to-PR references are available. " if references_available else
+             "Explicit issue-to-PR references are unavailable for one or more issues. ")
+            + "Otherwise, heuristically attribute to the latest preceding main merge within "
+            "30 days; temporal proximity does not establish causation."
+        ),
+    }
 
 
 def period(evidence, start, end, baseline=False):
@@ -308,6 +541,7 @@ def period(evidence, start, end, baseline=False):
     selected = [pr for pr in merged if within(pr["merged_at"], start, end)]
     invalid_cycles = [pr for pr in selected if hours(pr["created_at"], pr["merged_at"]) < 0]
     valid = [pr for pr in selected if pr not in invalid_cycles]
+    eligible_rework = [pr for pr in selected if "reviews" in pr and "commits" in pr]
     earliest = {}
     linked_prs = set()
     external_links = 0
@@ -375,6 +609,17 @@ def period(evidence, start, end, baseline=False):
                               if author_group(pr) == group])
             for group in ("dependabot", "copilot_authored", "other_or_unknown")
         },
+        "rework": (
+            {"available": False, "reason": "PR review/commit evidence is retained for the last 14 days"}
+            if timestamp(start) < timestamp(evidence.get("pr_activity_available_from", start))
+            else {"available": True, **rework_metrics(eligible_rework)}
+        ),
+        "rework_by_authorship": ({
+            group: rework_metrics([pr for pr in eligible_rework if authorship(pr) == group])
+            for group in ("agent", "human", "unknown")
+        } if timestamp(start) >= timestamp(evidence.get("pr_activity_available_from", start))
+            else None),
+        "escaped_defects": escaped_defect_metrics(evidence, selected, merged, start, end),
         "issue_lead_time": durations(lead_times),
         "linked_merged_prs": len(linked_prs), "link_coverage_denominator": len(selected),
         "issue_to_deployment": {"available": False, "reason": PROVENANCE_LIMITATION},
@@ -382,6 +627,32 @@ def period(evidence, start, end, baseline=False):
                      "negative_issue_durations": invalid_links,
                      "negative_pr_durations": len(invalid_cycles)},
         "workflows": workflow_metrics, "deployments": deployments,
+        "agent_audit_trail": {
+            "available": True,
+            "agent_authored_prs": [{
+                "number": pr["number"], "author": pr["author"],
+                "approved_by": sorted({
+                    review["user"] for review in pr.get("reviews", [])
+                    if review["state"] == "APPROVED" and review["user"]
+                }),
+                "merged_by": pr["merged_by"],
+                "gh_aw_runs": [{
+                    "run_id": run["run_id"], "run_url": run["run_url"],
+                } for run in evidence["attempts"]
+                   if run["workflow"] in {"issue_triage", "weekly_report"}
+                   and within(run["started_at"], start, end)
+                   and pr["number"] in run.get("pull_request_numbers", [])],
+            } for pr in evidence["prs"]
+               if authorship(pr) == "agent"
+               and (within(pr["created_at"], start, end) or within(pr["merged_at"], start, end))],
+            "gh_aw_runs": [{
+                "workflow": run["workflow"], "run_id": run["run_id"],
+                "run_url": run.get("run_url"), "actor": run.get("actor"),
+                "started_at": run["started_at"], "pull_request_numbers": run.get("pull_request_numbers", []),
+            } for run in evidence["attempts"]
+               if run["workflow"] in {"issue_triage", "weekly_report"}
+               and within(run["started_at"], start, end)],
+        },
         "dependabot_prs": {
             "opened": sum(within(pr["created_at"], start, end) for pr in dependabot),
             "merged": sum(within(pr["merged_at"], start, end) for pr in dependabot if pr["base"] == "main"),
@@ -417,7 +688,7 @@ def build_report(evidence, baseline=False):
         },
         "evidence_counts": {
             "prs": len(evidence["prs"]), "workflow_attempts": len(evidence["attempts"]),
-            "deployment_jobs": len(evidence["deployment_jobs"]),
+            "deployment_jobs": len(evidence["deployment_jobs"]), "issues": len(evidence["issues"]),
         },
     }
     if baseline:
@@ -437,6 +708,10 @@ def display(value):
 
 def duration_cell(value):
     return f"{display(value['median_hours'])} h (n={value['samples']})"
+
+
+def median_cell(value):
+    return f"{display(value['median'])} (n={value['samples']})"
 
 
 def outcome_cell(value):
@@ -486,6 +761,66 @@ def render(report):
     row("Excluded negative issue / PR durations", lambda p: (
         f"{p['excluded']['negative_issue_durations']} / {p['excluded']['negative_pr_durations']}"
     ))
+    for field, label in (
+        ("review_rounds", "Median review rounds"),
+        ("changes_requested_reviews", "Median changes-requested reviews"),
+        ("commits_after_first_review", "Median commits after first reviewed commit"),
+    ):
+        row(label, lambda p, field=field: (
+            median_cell(p["rework"][field]) if p["rework"]["available"]
+            else display(p["rework"]["reason"])
+        ))
+    row("Merged PRs titled Revert", lambda p: (
+        str(p["rework"]["pr_title_starts_with_revert"]) if p["rework"]["available"]
+        else display(p["rework"]["reason"])
+    ))
+    for group in ("agent", "human", "unknown"):
+        row(f"{group.title()} PRs: median review rounds", lambda p, group=group: (
+            median_cell(p["rework_by_authorship"][group]["review_rounds"])
+            if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+        ))
+        row(f"{group.title()} PRs: median changes-requested reviews", lambda p, group=group: (
+            median_cell(p["rework_by_authorship"][group]["changes_requested_reviews"])
+            if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+        ))
+        row(f"{group.title()} PRs: median commits after first reviewed commit", lambda p, group=group: (
+            median_cell(p["rework_by_authorship"][group]["commits_after_first_review"])
+            if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+        ))
+        row(f"{group.title()} merged PRs reverted", lambda p, group=group: (
+            str(p["rework_by_authorship"][group]["pr_title_starts_with_revert"])
+            if p["rework_by_authorship"] is not None else display(p["rework"]["reason"])
+        ))
+    row("New bug issues opened", lambda p: (
+        str(p["escaped_defects"]["opened"]["bugs"]) if p["escaped_defects"]["available"]
+        else display(p["escaped_defects"]["reason"])
+    ))
+    row("New incident issues opened", lambda p: (
+        str(p["escaped_defects"]["opened"]["incidents"]) if p["escaped_defects"]["available"]
+        else display(p["escaped_defects"]["reason"])
+    ))
+    row("Escaped defects by agent-authored PRs (bugs / incidents / unique issues)", lambda p: (
+        f"{p['escaped_defects']['by_authorship']['agent']['bugs']} / "
+        f"{p['escaped_defects']['by_authorship']['agent']['incidents']} / "
+        f"{p['escaped_defects']['by_authorship']['agent']['unique_issues']}"
+        if p["escaped_defects"]["available"] else display(p["escaped_defects"]["reason"])
+    ))
+    row("Escaped defects by human-authored PRs (bugs / incidents / unique issues)", lambda p: (
+        f"{p['escaped_defects']['by_authorship']['human']['bugs']} / "
+        f"{p['escaped_defects']['by_authorship']['human']['incidents']} / "
+        f"{p['escaped_defects']['by_authorship']['human']['unique_issues']}"
+        if p["escaped_defects"]["available"] else display(p["escaped_defects"]["reason"])
+    ))
+    row("Escaped defects by unknown-authorship PRs (bugs / incidents / unique issues)", lambda p: (
+        f"{p['escaped_defects']['by_authorship']['unknown']['bugs']} / "
+        f"{p['escaped_defects']['by_authorship']['unknown']['incidents']} / "
+        f"{p['escaped_defects']['by_authorship']['unknown']['unique_issues']}"
+        if p["escaped_defects"]["available"] else display(p["escaped_defects"]["reason"])
+    ))
+    row("Agent-authored PRs and gh-aw runs in audit trail", lambda p: (
+        f"{len(p['agent_audit_trail']['agent_authored_prs'])} PRs / "
+        f"{len(p['agent_audit_trail']['gh_aw_runs'])} runs"
+    ))
     for kind in ("ci", "issue_triage", "weekly_report"):
         row(f"{kind} reliability", lambda p, kind=kind: outcome_cell(p["workflows"][kind]))
         row(f"{kind} rerun attempts", lambda p, kind=kind: str(p["workflows"][kind]["rerun_attempts"]))
@@ -505,6 +840,73 @@ def render(report):
             " / ".join(str(p["alerts"][kind]["events"][field]) for field in ("created_at", "fixed_at", "dismissed_at"))
             if p["alerts"][kind]["available"] else display(p["alerts"][kind]["reason"])
         ))
+    lines.extend(["", "### Rework by merged PR", ""])
+    if current["rework"]["available"]:
+        lines.extend([
+            "| PR | Author | Split | Review rounds | Changes requested | Commits after first reviewed commit | Revert |",
+            "| --- | --- | --- | ---: | ---: | ---: | --- |",
+        ])
+        for item in current["rework"]["per_merged_pr"]:
+            lines.append(
+                f"| #{item['number']} | {display(item['author'])} | {item['authorship']} | "
+                f"{item['review_rounds']} | {item['changes_requested_reviews']} | "
+                f"{display(item['commits_after_first_review'])} | "
+                f"{'yes' if item['is_revert'] else 'no'} |"
+            )
+        lines.append(
+            f"\nCommits after first reviewed commit unavailable for "
+            f"{current['rework']['commits_after_first_review_unavailable']} PR(s)."
+        )
+    else:
+        lines.append(display(current["rework"]["reason"]))
+
+    lines.extend(["", "### Escaped-defect candidates by merged PR", ""])
+    if current["escaped_defects"]["available"]:
+        lines.extend([
+            "| PR | Author | Split | Bugs | Incidents | Unique issues | Attribution |",
+            "| --- | --- | --- | ---: | ---: | ---: | --- |",
+        ])
+        for item in current["escaped_defects"]["per_merged_pr"]:
+            lines.append(
+                f"| #{item['number']} | {display(item['author'])} | {item['authorship']} | "
+                f"{item['bugs']} | {item['incidents']} | {item['unique_issues']} | "
+                f"{', '.join(item['attribution'])} |"
+            )
+        lines.append(
+            f"\nUnattributed opened defect issues: {current['escaped_defects']['unattributed_issues']}. "
+            f"{current['escaped_defects']['attribution_method']}"
+        )
+    else:
+        lines.append(display(current["escaped_defects"]["reason"]))
+
+    audit = current["agent_audit_trail"]
+    lines.extend(["", "### Agent audit trail", "",
+                  "Read-only evidence for the current window; full prompts and tool-call logs are not included.",
+                  "", "**Agent-authored PRs**", "",
+                  "| PR | Author | Approved by | Merged by | Matching gh-aw run IDs / URLs |",
+                  "| --- | --- | --- | --- | --- |"])
+    for item in audit["agent_authored_prs"]:
+        runs = ", ".join(
+            f"`{run['run_id']}` {display(run['run_url'])}" for run in item["gh_aw_runs"]
+        ) or "none observed"
+        lines.append(
+            f"| #{item['number']} | {display(item['author'])} | "
+            f"{', '.join(display(user) for user in item['approved_by']) or 'none observed'} | "
+            f"{display(item['merged_by'])} | {runs} |"
+        )
+    if not audit["agent_authored_prs"]:
+        lines.append("| None observed | — | — | — | — |")
+    lines.extend(["", "**gh-aw workflow runs**", "",
+                  "| Workflow | Run ID | URL | Actor | Started | PR numbers |",
+                  "| --- | ---: | --- | --- | --- | --- |"])
+    for run in audit["gh_aw_runs"]:
+        lines.append(
+            f"| {run['workflow']} | {run['run_id']} | {display(run['run_url'])} | "
+            f"{display(run['actor'])} | {run['started_at']} | "
+            f"{', '.join(f'#{number}' for number in run['pull_request_numbers']) or '—'} |"
+        )
+    if not audit["gh_aw_runs"]:
+        lines.append("| None observed | — | — | — | — | — |")
     lines.extend([
         "", "### Coverage and interpretation", "",
         f"- **Issue-to-deployment:** {PROVENANCE_LIMITATION}",
@@ -517,11 +919,24 @@ def render(report):
         "completed, not verified runtime health.",
         "- Same-repository explicit closing links only; each issue uses its earliest linked main merge. "
         "Unlinked work is not assigned a guessed lead time.",
+        "- Defect counts include issues labeled `bug` and incidents labeled `incident` or `sev1`-`sev4`, "
+        "opened in the reporting window. Per-PR attribution prefers an explicit same-repository closing-issue "
+        "reference; otherwise it is a **heuristic** assigning the issue to the latest preceding main merge "
+        "within 30 days. Temporal proximity is not causal proof. The opened count includes attributed and "
+        "unattributed issues; defects linked to multiple PRs are assigned once.",
+        "- Agent PRs are authored by a bot/Copilot login or contain a `Co-authored-by: Copilot` commit trailer. "
+        "Other named authors are classified as human; missing authors are unknown. Review rounds count submitted "
+        "non-comment reviews; commits after the first review count commits after the SHA it reviewed, a proxy "
+        "for post-review rework. Reverted PRs have titles starting with `Revert`.",
+        "- Agent audit data lists PR number, author, approving reviewers, merger, and matching gh-aw run IDs/URLs; "
+        "it also lists gh-aw workflow runs in the window. It contains no prompts, secrets, or tool-call logs.",
         "- CI includes build, tests and CodeQL together; execution success is not a defect or vulnerability count. "
         "Agentic execution success is not advice quality or proof of a published report.",
         "- GitHub APIs are not transactional; observations span the collection interval. "
         "Deleted/expired runs and missing historical state cannot be recovered. "
         "Alert event timestamps show available latest transitions, not a complete event log.",
+        "- Review/commit and labeled-issue evidence is retained for the last 14 days. Older "
+        "baseline periods show these metrics as unavailable rather than zero.",
         "", "### Current inventory (not historical period-end state)", "",
         f"- Open Dependabot PRs: {report['inventory_at_collection']['dependabot_open_prs']}.",
     ])
@@ -553,6 +968,7 @@ def render(report):
     lines.extend([
         "", "### Sources", "",
         f"Evidence: {report['evidence_counts']['prs']} PRs, "
+        f"{report['evidence_counts']['issues']} labeled issues, "
         f"{report['evidence_counts']['workflow_attempts']} workflow attempts, "
         f"{report['evidence_counts']['deployment_jobs']} unique delivery jobs.",
         f"[Metric definitions and runbook](https://github.com/{report['repository']}/blob/main/docs/agentic-sdlc.md#sdlc-metrics-dashboard) "

@@ -19,12 +19,13 @@ END = "2026-09-25T00:00:00Z"
 
 def evidence():
     return {
-        "schema_version": 1, "repository": REPOSITORY,
+        "schema_version": 2, "repository": REPOSITORY,
         "repository_created_at": "2026-09-23T12:00:00Z",
         "collected_at": "2026-09-25T12:00:00Z",
         "collection_finished_at": "2026-09-25T12:01:00Z",
         "collector_commit": "a" * 40,
-        "prs": [], "attempts": [], "deployment_jobs": [],
+        "pr_activity_available_from": START, "issues_available_from": START,
+        "prs": [], "issues": [], "attempts": [], "deployment_jobs": [],
         "alerts": {
             "codeql": {"available": True, "reason": None, "items": []},
             "dependabot": {"available": False, "reason": "HTTP 403: denied", "items": []},
@@ -36,8 +37,9 @@ def pr(number=1, **kwargs):
     return {
         "number": number, "created_at": "2026-09-23T12:00:00Z",
         "merged_at": "2026-09-24T12:00:00Z",
-        "state": "MERGED", "base": "main", "author": "maintainer",
-        "issues": [], **kwargs,
+        "state": "MERGED", "base": "main", "author": "maintainer", "author_is_bot": False,
+        "title": "Add feature", "is_revert": False, "merged_by": "maintainer",
+        "issues": [], "reviews": [], "commits": [], **kwargs,
     }
 
 
@@ -93,6 +95,90 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(result["pr_cycle"], {"samples": 2, "median_hours": 18})
         self.assertEqual(result["excluded"]["negative_pr_durations"], 1)
         self.assertEqual(result["pr_cycle_by_author"]["dependabot"]["median_hours"], 12)
+
+    def test_agent_rework_medians_and_revert_count(self):
+        agent_pr = pr(
+            1, author="copilot-swe-agent[bot]", is_revert=True,
+            reviews=[
+                {"state": "CHANGES_REQUESTED", "submitted_at": "2026-09-23T13:00:00Z",
+                 "commit_id": "a", "user": "reviewer"},
+                {"state": "APPROVED", "submitted_at": "2026-09-24T00:00:00Z",
+                 "commit_id": "c", "user": "approver"},
+            ],
+            commits=[{"sha": "a"}, {"sha": "b"}, {"sha": "c"}],
+        )
+        result = metrics.period({**evidence(), "prs": [agent_pr]}, START, END)
+        rework = result["rework_by_authorship"]["agent"]
+        self.assertEqual(rework["review_rounds"], {"samples": 1, "median": 2})
+        self.assertEqual(rework["changes_requested_reviews"], {"samples": 1, "median": 1})
+        self.assertEqual(rework["commits_after_first_review"], {"samples": 1, "median": 2})
+        self.assertEqual(rework["pr_title_starts_with_revert"], 1)
+        self.assertEqual(result["rework_by_authorship"]["human"]["merged_prs"], 0)
+
+    def test_defect_counts_and_per_pr_authorship_use_explicit_and_heuristic_attribution(self):
+        data = evidence()
+        first = pr(
+            1, merged_at="2026-09-20T00:00:00Z", author="copilot-swe-agent[bot]",
+            commits=[{"copilot_coauthored": False}],
+        )
+        second = pr(
+            2, merged_at="2026-09-23T00:00:00Z", author="human",
+            issues=[issue(2, created_at="2026-09-23T01:00:00Z")],
+        )
+        data["prs"] = [first, second]
+        data["issues"] = [
+            {"number": 1, "created_at": "2026-09-22T00:00:00Z", "labels": ["bug"]},
+            {"number": 2, "created_at": "2026-09-23T01:00:00Z", "labels": ["incident", "sev2"]},
+            {"number": 3, "created_at": "2026-09-19T00:00:00Z", "labels": ["sev1"]},
+        ]
+        result = metrics.period(data, START, END)["escaped_defects"]
+        self.assertEqual(result["opened"], {"bugs": 1, "incidents": 2, "unique_issues": 3})
+        self.assertEqual(
+            [(item["number"], item["bugs"], item["incidents"], item["attribution"])
+             for item in result["per_merged_pr"]],
+            [
+                (1, 1, 0, ["heuristic_30_day_temporal_proximity"]),
+                (2, 0, 1, ["explicit_closing_issue_reference"]),
+            ],
+        )
+        self.assertEqual(result["by_authorship"]["agent"]["bugs"], 1)
+        self.assertEqual(result["by_authorship"]["human"]["incidents"], 1)
+        self.assertEqual(result["unattributed_issues"], 1)
+
+    def test_issues_and_rework_outside_retention_are_unavailable_not_zero(self):
+        data = evidence()
+        data["issues_available_from"] = "2026-09-24T00:00:00Z"
+        data["pr_activity_available_from"] = "2026-09-24T00:00:00Z"
+        result = metrics.period(data, START, END)
+        self.assertFalse(result["escaped_defects"]["available"])
+        self.assertIsNone(result["rework_by_authorship"])
+        self.assertFalse(result["rework"]["available"])
+
+    def test_agent_audit_trail_records_approvals_and_related_gh_aw_runs(self):
+        data = evidence()
+        agent_pr = pr(1, author="Copilot", merged_by="maintainer", reviews=[
+            {"state": "APPROVED", "submitted_at": "2026-09-24T00:00:00Z",
+             "commit_id": "a", "user": "approver"},
+        ])
+        run = attempt(
+            workflow="issue_triage", run_id=42, run_url="https://github.com/example/repo/actions/runs/42",
+            actor="copilot-swe-agent[bot]", pull_request_numbers=[1],
+        )
+        data["prs"] = [agent_pr]
+        data["attempts"] = [run]
+        audit = metrics.period(data, START, END)["agent_audit_trail"]
+        self.assertEqual(audit["agent_authored_prs"][0]["approved_by"], ["approver"])
+        self.assertEqual(audit["agent_authored_prs"][0]["merged_by"], "maintainer")
+        self.assertEqual(audit["agent_authored_prs"][0]["gh_aw_runs"][0]["run_id"], 42)
+        self.assertEqual(
+            audit["agent_authored_prs"][0]["gh_aw_runs"][0]["run_url"],
+            "https://github.com/example/repo/actions/runs/42",
+        )
+        self.assertEqual(audit["gh_aw_runs"][0]["pull_request_numbers"], [1])
+        self.assertNotIn("prompt", str(audit).lower())
+
+    def test_graphql_bot_type_counts_as_agent_authorship(self):
+        self.assertEqual(metrics.authorship(pr(author="automation", author_is_bot=True)), "agent")
 
     def test_issue_links_deduplicate_and_exclude_other_repositories(self):
         data = evidence()
@@ -180,6 +266,7 @@ class MetricTests(unittest.TestCase):
     def test_dependabot_403_is_unavailable_not_zero(self):
         api = FakeApi([
             ({"created_at": START}, {}),
+            ([], {}),
             *[({"workflow_runs": [], "total_count": 0}, {}) for _ in range(4)],
             ([], {}),
             metrics.ApiError(403, "dependabot/alerts"),
@@ -204,6 +291,8 @@ class MetricTests(unittest.TestCase):
         self.assertIn("not proof", output)
         self.assertIn("Initial partial baseline", output)
         self.assertIn("N/A (repository did not exist)", output)
+        self.assertIn("Agent audit trail", output)
+        self.assertIn("not causal proof", output)
         self.assertNotIn("N/A%", output)
         self.assertEqual(metrics.display("@owner|<script>\n"), "&#64;owner&#124;&lt;script&gt; ")
 
@@ -222,6 +311,55 @@ class FakeApi(metrics.GitHub):
 
 
 class ApiTests(unittest.TestCase):
+    def test_recent_pr_activity_stores_only_normalized_review_and_commit_evidence(self):
+        class ActivityApi:
+            def pages(self, endpoint, key=None):
+                if endpoint.endswith("/reviews"):
+                    return [{
+                        "state": "APPROVED", "submitted_at": "2026-09-24T00:00:00Z",
+                        "commit_id": "sha1", "user": {"login": "reviewer"},
+                    }]
+                return [
+                    {"sha": "sha1", "commit": {"committer": {"date": START},
+                     "message": "change\n\nCo-authored-by: Copilot App <copilot@example.com>"}},
+                    {"sha": "sha2", "commit": {"committer": {"date": END}, "message": "follow-up"}},
+                ]
+
+        target = pr(author="human")
+        metrics.collect_recent_pr_activity(ActivityApi(), REPOSITORY, [target], END)
+        self.assertTrue(target["commits"][0]["copilot_coauthored"])
+        self.assertEqual(target["reviews"][0]["user"], "reviewer")
+        self.assertNotIn("message", target["commits"][0])
+        self.assertEqual(metrics.authorship(target), "agent")
+
+    def test_labeled_defect_collection_keeps_only_normalized_fields_and_pr_references(self):
+        api = FakeApi([
+            ([{
+                "number": 8, "created_at": "2026-09-24T00:00:00Z",
+                "labels": [{"name": "Bug"}, {"name": "Sev2"}],
+                "body": "not retained", "title": "private prompt text",
+            }, {
+                "number": 9, "created_at": "2026-09-24T00:00:00Z",
+                "labels": [{"name": "enhancement"}],
+            }, {
+                "number": 10, "created_at": "2026-09-24T00:00:00Z",
+                "labels": [], "pull_request": {"url": "not an issue"},
+            }], {}),
+            ([{
+                "event": "cross-referenced",
+                "source": {"issue": {
+                    "number": 4, "html_url": f"https://github.com/{REPOSITORY}/pull/4",
+                    "pull_request": {"url": "https://api.github.com/repos/example/repo/pulls/4"},
+                }},
+            }], {}),
+        ])
+        issues = metrics.collect_defect_issues(api, REPOSITORY, END)
+        self.assertEqual(issues, [{
+            "number": 8, "created_at": "2026-09-24T00:00:00Z",
+            "labels": ["bug", "sev2"], "references_available": True,
+            "referenced_pr_numbers": [4],
+        }])
+
     def test_transport_retries_transient_failures_without_leaking_denial(self):
         api = metrics.GitHub.__new__(metrics.GitHub)
         api.token = "fake-token"
@@ -285,8 +423,8 @@ class ApiTests(unittest.TestCase):
         def connection(nodes, cursor=None):
             return {"nodes": nodes, "pageInfo": {"hasNextPage": bool(cursor), "endCursor": cursor}}
 
-        raw_pr = {"number": 1, "createdAt": START, "mergedAt": END, "state": "MERGED",
-                  "baseRefName": "main", "author": None,
+        raw_pr = {"number": 1, "title": "Example", "createdAt": START, "mergedAt": END,
+                  "state": "MERGED", "baseRefName": "main", "author": None, "mergedBy": None,
                   "closingIssuesReferences": connection([link(1)], "nested")}
         api = FakeApi([
             ({"data": {"repository": {"pullRequests": connection([raw_pr], "outer")}}}, {}),
@@ -303,6 +441,7 @@ class ApiTests(unittest.TestCase):
             with self.subTest(status=status):
                 api = FakeApi([
                     ({"created_at": START}, {}),
+                    ([], {}),
                     *[({"workflow_runs": [], "total_count": 0}, {}) for _ in range(4)],
                     metrics.ApiError(status, "alerts"),
                     ([], {}),
