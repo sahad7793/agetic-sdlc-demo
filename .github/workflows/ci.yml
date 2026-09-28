@@ -21,6 +21,9 @@ jobs:
       - name: Test SDLC metric contracts
         run: python3 -m unittest discover -s tests/sdlc_metrics
 
+      - name: Test custom agent definitions
+        run: python3 -m unittest discover -s tests/agent_definitions
+
       - name: Test rollback contracts
         run: python3 -m unittest discover -s tests/rollback
 
