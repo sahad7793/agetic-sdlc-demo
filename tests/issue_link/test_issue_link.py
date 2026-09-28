@@ -53,6 +53,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ github.event.pull_request.base.sha }}", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("run: python3 scripts/issue_link_check.py", workflow)
+        self.assertIn("if: hashFiles('scripts/issue_link_check.py') != ''", workflow)
+        self.assertIn("Report bootstrap-only skip", workflow)
+        self.assertIn("no PR content was executed", workflow)
         self.assertNotIn("pull_request_target", workflow)
         self.assertNotIn("github.event.pull_request.head.sha", workflow)
 

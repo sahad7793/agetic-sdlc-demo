@@ -21,7 +21,12 @@ jobs:
           persist-credentials: false
 
       - name: Check pull request body
+        if: hashFiles('scripts/issue_link_check.py') != ''
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python3 scripts/issue_link_check.py
+
+      - name: Report bootstrap-only skip
+        if: hashFiles('scripts/issue_link_check.py') == ''
+        run: echo "::notice::Trusted base revision does not contain the issue-link checker yet; no PR content was executed."

@@ -26,9 +26,11 @@ change has no tracking issue.
 This `pull_request` workflow has only `contents: read` and
 `pull-requests: read` permissions. It checks out the PR's base revision and
 passes the PR body to the checker as data; it does not check out or execute PR
-content. The check is advisory by default and is **not** included in the
-repository ruleset's required checks. Making it required is an owner decision
-and requires an explicit ruleset change.
+content. On the initial adoption PR, the trusted base may not yet contain the
+checker; in that case the workflow reports a notice and skips rather than
+running the PR's copy. The check is advisory by default and is **not** included
+in the repository ruleset's required checks. Making it required is an owner
+decision and requires an explicit ruleset change.
 
 ## Delivery and deployment
 
