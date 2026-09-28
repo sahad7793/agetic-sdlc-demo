@@ -1,17 +1,16 @@
 import copy
-import importlib.util
 import io
 from pathlib import Path
+import sys
 import unittest
 import urllib.error
 from unittest.mock import patch
 
 
-SPEC = importlib.util.spec_from_file_location(
-    "sdlc_metrics", Path(__file__).resolve().parents[2] / "scripts" / "sdlc_metrics.py"
-)
-metrics = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(metrics)
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts import sdlc_metrics as metrics
 REPOSITORY = "example/repo"
 START = "2026-09-18T00:00:00Z"
 END = "2026-09-25T00:00:00Z"
@@ -115,6 +114,27 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(rework["pr_title_starts_with_revert"], 1)
         self.assertEqual(result["rework_by_authorship"]["human"]["merged_prs"], 0)
 
+    def test_authorship_separates_copilot_humans_unknowns_and_automation(self):
+        data = evidence()
+        data["prs"] = [
+            pr(1, author="copilot-swe-agent[bot]", author_is_bot=True),
+            pr(2, author="maintainer", commits=[{"copilot_coauthored": True}]),
+            pr(3, author="dependabot[bot]", author_is_bot=True,
+               commits=[{"copilot_coauthored": True}]),
+            pr(4, author="renovate[bot]", author_is_bot=True),
+            pr(5, author="github-actions[bot]", author_is_bot=True),
+            pr(6, author="maintainer"),
+            pr(7, author=None),
+        ]
+        groups = metrics.period(data, START, END)["rework_by_authorship"]
+        self.assertEqual(groups["agent"]["merged_prs"], 2)
+        self.assertEqual(groups["automation"]["merged_prs"], 3)
+        self.assertEqual(groups["human"]["merged_prs"], 1)
+        self.assertEqual(groups["unknown"]["merged_prs"], 1)
+        self.assertEqual(sum(group["merged_prs"] for group in groups.values()), 7)
+        report = metrics.build_report(data)
+        self.assertIn("Automation PRs: median review rounds", metrics.render(report))
+
     def test_defect_counts_and_per_pr_authorship_use_explicit_and_heuristic_attribution(self):
         data = evidence()
         first = pr(
@@ -154,6 +174,23 @@ class MetricTests(unittest.TestCase):
         self.assertIsNone(result["rework_by_authorship"])
         self.assertFalse(result["rework"]["available"])
 
+    def test_synthetic_incidents_are_excluded_from_open_and_attributed_defects(self):
+        data = evidence()
+        data["prs"] = [pr(1, author="copilot-swe-agent[bot]")]
+        data["issues"] = [
+            issue(1, labels=["incident", "sev4"],
+                  title="[INCIDENT][Sev4][staging] TEST ONLY - synthetic drill"),
+            issue(2, labels=["incident", "sev4"], title="[TEST] workflow verification"),
+            issue(3, labels=["incident", "sev4", "synthetic"], title="Synthetic verification"),
+            issue(4, labels=["incident", "sev4"], created_at="2026-09-24T13:00:00Z",
+                  title="Production alert"),
+        ]
+        result = metrics.period(data, START, END)["escaped_defects"]
+        self.assertEqual(result["opened"], {"bugs": 0, "incidents": 1, "unique_issues": 1})
+        self.assertEqual(result["excluded_synthetic_issues"], 3)
+        self.assertEqual(result["by_authorship"]["agent"]["incidents"], 1)
+        self.assertEqual(result["unattributed_issues"], 0)
+
     def test_agent_audit_trail_records_approvals_and_related_gh_aw_runs(self):
         data = evidence()
         agent_pr = pr(1, author="Copilot", merged_by="maintainer", reviews=[
@@ -177,8 +214,8 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(audit["gh_aw_runs"][0]["pull_request_numbers"], [1])
         self.assertNotIn("prompt", str(audit).lower())
 
-    def test_graphql_bot_type_counts_as_agent_authorship(self):
-        self.assertEqual(metrics.authorship(pr(author="automation", author_is_bot=True)), "agent")
+    def test_graphql_bot_type_counts_as_automation_authorship(self):
+        self.assertEqual(metrics.authorship(pr(author="automation", author_is_bot=True)), "automation")
 
     def test_issue_links_deduplicate_and_exclude_other_repositories(self):
         data = evidence()
@@ -192,6 +229,21 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(result["excluded"]["external_issue_references"], 1)
         self.assertEqual(result["excluded"]["negative_issue_durations"], 1)
         self.assertFalse(result["issue_to_deployment"]["available"])
+
+    def test_body_references_count_for_coverage_but_not_closing_lead_time(self):
+        data = evidence()
+        data["prs"] = [
+            pr(1, issues=[issue()], issue_references=[
+                {"repository": REPOSITORY, "number": 11},
+            ]),
+            pr(2, issue_references=[{"repository": REPOSITORY, "number": 12}]),
+            pr(3, issue_references=[{"repository": "external/repo", "number": 13}]),
+        ]
+        result = metrics.period(data, START, END)
+        self.assertEqual(result["linked_merged_prs"], 2)
+        self.assertEqual(result["link_coverage_denominator"], 3)
+        self.assertEqual(result["excluded"]["external_issue_references"], 1)
+        self.assertEqual(result["issue_lead_time"], {"samples": 1, "median_hours": 36})
 
     def test_earliest_issue_merge_outside_window_is_not_recounted(self):
         data = evidence()
@@ -357,7 +409,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(issues, [{
             "number": 8, "created_at": "2026-09-24T00:00:00Z",
             "labels": ["bug", "sev2"], "references_available": True,
-            "referenced_pr_numbers": [4],
+            "referenced_pr_numbers": [4], "synthetic": False,
         }])
 
     def test_transport_retries_transient_failures_without_leaking_denial(self):
@@ -425,6 +477,7 @@ class ApiTests(unittest.TestCase):
 
         raw_pr = {"number": 1, "title": "Example", "createdAt": START, "mergedAt": END,
                   "state": "MERGED", "baseRefName": "main", "author": None, "mergedBy": None,
+                  "body": "Closes #4\nRefs #5\n<!-- Fixes #6 -->",
                   "closingIssuesReferences": connection([link(1)], "nested")}
         api = FakeApi([
             ({"data": {"repository": {"pullRequests": connection([raw_pr], "outer")}}}, {}),
@@ -433,6 +486,10 @@ class ApiTests(unittest.TestCase):
         ])
         result = metrics.collect_prs(api, "example", "repo")
         self.assertEqual([item["number"] for item in result[0]["issues"]], [1, 2])
+        self.assertEqual(result[0]["issue_references"], [
+            {"repository": REPOSITORY, "number": 4},
+            {"repository": REPOSITORY, "number": 5},
+        ])
         self.assertIsNone(result[0]["author"])
         self.assertEqual(len(api.calls), 3)
 

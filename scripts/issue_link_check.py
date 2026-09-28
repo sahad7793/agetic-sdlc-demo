@@ -5,16 +5,12 @@ import os
 import re
 import sys
 
+if __package__:
+    from .issue_references import extract_issue_references, HTML_COMMENT
+else:
+    from issue_references import extract_issue_references, HTML_COMMENT
 
-ISSUE_REFERENCE = re.compile(
-    r"\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|refs?|references?)\s*:?\s+#[1-9]\d*\b",
-    re.IGNORECASE,
-)
-ISSUE_URL = re.compile(
-    r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9]\d*"
-    r"(?:[/?#][^\s]*)?(?![A-Za-z0-9_-])",
-    re.IGNORECASE,
-)
+
 NO_ISSUE_LINE = re.compile(r"^\s*No-Issue\s*:\s*(?P<reason>\S(?:.*\S)?)\s*$", re.IGNORECASE)
 DEPENDABOT = "dependabot[bot]"
 
@@ -24,8 +20,8 @@ def validate_pull_request_body(body, author):
     if author.casefold() == DEPENDABOT:
         return None
 
-    visible_body = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.DOTALL)
-    if ISSUE_REFERENCE.search(visible_body) or ISSUE_URL.search(visible_body):
+    visible_body = HTML_COMMENT.sub("", body or "")
+    if extract_issue_references(visible_body):
         return None
 
     for line in visible_body.splitlines():
