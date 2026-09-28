@@ -1043,7 +1043,7 @@ Open the approved issue, assign it to **Copilot**, or use **Open in Copilot**. I
 
 ### 5. Workflow orchestration
 
-This repository runs three [GitHub Agentic Workflows](https://github.github.com/gh-aw/) (`gh-aw`), configured under `.github/workflows/`: issue triage comments on newly opened issues, the requirements spec agent advances eligible issues from `stage:needs-spec` to `stage:spec-ready`, and the weekly report opens a summary issue. The spec agent cannot apply approval labels; a maintainer reviews and applies `stage:spec-approved` before architecture work begins. See [agentic-workflows.md](agentic-workflows.md) for workflow behavior and the `COPILOT_GITHUB_TOKEN` repository secret required to run them.
+This repository runs [GitHub Agentic Workflows](https://github.github.com/gh-aw/) (`gh-aw`) configured under `.github/workflows/`. Label-driven agents use label-name-filtered triggers so unrelated issue labels do not activate full agent jobs, and the lifecycle router alone announces stage transitions. The agents cannot apply approval labels; a maintainer reviews the requirements and applies `stage:spec-approved` before architecture work begins. See [agentic-workflows.md](agentic-workflows.md) for workflow behavior and the `COPILOT_GITHUB_TOKEN` repository secret required to run them.
 
 ### 6. Review governance and ownership routing
 

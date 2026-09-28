@@ -2,8 +2,10 @@
 name: Solution Planning
 description: Prepare an implementation plan from an approved specification for maintainer review.
 on:
-  issues:
-    types: [labeled]
+  label_command:
+    names: [stage:spec-approved]
+    events: [issues]
+    remove_label: false
 
 permissions:
   contents: read
@@ -22,7 +24,6 @@ safe-outputs:
     target: triggering
   add-labels:
     allowed: [stage:plan-ready]
-    required-labels: [stage:spec-approved]
     issues: true
     pull-requests: false
     max: 1
@@ -45,11 +46,10 @@ design is approved.
 
 ## Applicability and evidence
 
-1. Continue only for an `issues.labeled` event whose newly added label is
-   `stage:spec-approved`. Read the current issue and confirm that it is open
-   and has exactly one `stage:*` label, `stage:spec-approved`. For any other
-   event or state, call `noop` with a short reason and do not comment or change
-   labels.
+1. Continue only when activated by the `stage:spec-approved` label command.
+   Read the current issue and confirm that it is open and has exactly one
+   `stage:*` label, `stage:spec-approved`. For any other event or state, call
+   `noop` with a short reason and do not comment or change labels.
 2. Read the issue body and comments. Find the latest comment containing the
    gh-aw marker `gh-aw-workflow-call-id: .../spec-agent`; use it as the
    requirements proposal. Include later comments only when their GitHub
@@ -121,13 +121,13 @@ from those still unanswered. Do not invent decisions. If blocking questions
 remain unanswered, state that the issue should return to `stage:needs-spec`
 instead of being approved.
 
-End with this maintainer handoff: **Review this plan and apply
-`stage:plan-approved` to approve it, or return the issue to
-`stage:needs-spec` for revision.**
+End with a neutral maintainer-review handoff. Do not mention labels, claim a
+lifecycle transition, or name the next owner; the lifecycle router posts those
+messages.
 
 After posting the comment, use only the configured safe outputs: add
 `stage:plan-ready` and remove `stage:spec-approved`, each at most once and
-only on the triggering issue. Both outputs require `stage:spec-approved` to
-still be present. Do not apply either approval label. `GITHUB_TOKEN` label
-changes do not trigger another workflow run, so this workflow itself completes
-the `stage:spec-approved` to `stage:plan-ready` transition.
+only on the triggering issue. Do not apply either approval label. The
+add-label output has no source-label precondition, so it can run after
+source-label removal. The remove-label output remains restricted to
+`stage:spec-approved` and requires that source label to still be present.
