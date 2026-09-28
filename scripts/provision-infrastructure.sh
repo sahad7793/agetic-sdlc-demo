@@ -27,10 +27,13 @@ az account set --subscription "$subscription_id"
 
 provisioner_ip=$(curl --fail --silent --show-error https://api.ipify.org)
 
-az group create --name "$shared_resource_group" --location "$shared_location" --tags application=taskmanagement >/dev/null
+az group create --name "$shared_resource_group" --location "$shared_location" \
+  --tags application=taskmanagement environment=shared costCenter="$cost_center_tag" owner="$owner_tag" >/dev/null
 
-az group create --name "$staging_resource_group" --location "$staging_location" --tags application=taskmanagement >/dev/null
-az group create --name "$production_resource_group" --location "$production_location" --tags application=taskmanagement >/dev/null
+az group create --name "$staging_resource_group" --location "$staging_location" \
+  --tags application=taskmanagement environment=staging costCenter="$cost_center_tag" owner="$owner_tag" >/dev/null
+az group create --name "$production_resource_group" --location "$production_location" \
+  --tags application=taskmanagement environment=production costCenter="$cost_center_tag" owner="$owner_tag" >/dev/null
 
 az role assignment create \
   --assignee-object-id "$staging_deployment_principal_id" \

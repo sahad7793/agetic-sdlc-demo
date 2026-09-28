@@ -43,15 +43,13 @@ param costCenter string
 @description('Cost-allocation tag identifying the owning team or individual accountable for this environment\'s spend. No default: the operator must supply the organization\'s actual value.')
 param owner string
 
-@description('Free-form tags applied to all environment resources, in addition to the required cost-allocation tags below.')
-param tags object = {
-  environment: environmentName
-}
+@description('Additional tags applied to all environment resources.')
+param tags object = {}
 
-// Cost-governance allocation tags (costCenter/owner) are enforced here so every
-// environment resource always carries them, regardless of what the caller's
-// free-form `tags` parameter contains. See docs/agentic-sdlc.md > Cost governance.
+// Required tags override any conflicting values in the caller's additional tags.
 var resourceTags = union(tags, {
+  application: 'taskmanagement'
+  environment: environmentName
   costCenter: costCenter
   owner: owner
 })
@@ -226,6 +224,8 @@ module observability 'observability.bicep' = {
     applicationInsightsId: applicationInsights.id
     healthCheckUrl: 'https://${containerApp.properties.configuration.ingress.fqdn}/health'
     alertEmail: alertEmail
+    costCenter: costCenter
+    owner: owner
     tags: resourceTags
   }
 }

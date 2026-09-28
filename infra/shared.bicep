@@ -30,13 +30,12 @@ param costCenter string
 @description('Cost-allocation tag identifying the owning team or individual accountable for shared-resource spend. No default: the operator must supply the organization\'s actual value.')
 param owner string
 
-@description('Free-form tags applied to every shared resource, in addition to the required cost-allocation tags below.')
+@description('Additional tags applied to every shared resource.')
 param tags object = {}
 
-// Cost-governance allocation tags (costCenter/owner) are enforced here so every
-// shared resource always carries them, regardless of what the caller's
-// free-form `tags` parameter contains. See docs/agentic-sdlc.md > Cost governance.
 var resourceTags = union(tags, {
+  application: 'taskmanagement'
+  environment: 'shared'
   costCenter: costCenter
   owner: owner
 })
@@ -113,6 +112,8 @@ module observabilityWorkbook 'workbook.bicep' = {
     productionApplicationInsightsId: productionApplicationInsightsId
     stagingContainerAppId: stagingContainerAppId
     productionContainerAppId: productionContainerAppId
+    costCenter: costCenter
+    owner: owner
     tags: resourceTags
   }
 }

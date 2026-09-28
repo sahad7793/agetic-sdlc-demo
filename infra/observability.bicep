@@ -25,10 +25,21 @@ param healthCheckUrl string
 @description('Email address that receives alert notifications for this environment.')
 param alertEmail string
 
-@description('Tags applied to all observability resources.')
-param tags object = {
+@description('Cost-allocation tag identifying the owning cost center/GL code for this environment. No default: the operator must supply the organization\'s actual value.')
+param costCenter string
+
+@description('Cost-allocation tag identifying the owning team or individual accountable for this environment\'s spend. No default: the operator must supply the organization\'s actual value.')
+param owner string
+
+@description('Additional tags applied to all observability resources.')
+param tags object = {}
+
+var resourceTags = union(tags, {
+  application: 'taskmanagement'
   environment: environmentName
-}
+  costCenter: costCenter
+  owner: owner
+})
 
 var actionGroupName = '${containerAppName}-ag'
 var webTestName = '${containerAppName}-health-test'
@@ -36,7 +47,7 @@ var webTestName = '${containerAppName}-health-test'
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   name: actionGroupName
   location: 'global'
-  tags: tags
+  tags: resourceTags
   properties: {
     groupShortName: take(replace('${environmentName}tm', '-', ''), 12)
     enabled: true
@@ -53,7 +64,7 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
 resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: '${containerAppName}-5xx-rate'
   location: 'global'
-  tags: tags
+  tags: resourceTags
   properties: {
     description: 'Fires when the Container App returns more than 5 HTTP 5xx responses within 5 minutes.'
     severity: 1
@@ -100,7 +111,7 @@ resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 resource restartCountAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: '${containerAppName}-restart-spike'
   location: 'global'
-  tags: tags
+  tags: resourceTags
   properties: {
     description: 'Fires when Container App replicas restart more than 3 times within 15 minutes, indicating crash-looping.'
     severity: 2
@@ -138,7 +149,7 @@ resource restartCountAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 resource p95LatencyAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
   name: '${containerAppName}-p95-latency'
   location: location
-  tags: tags
+  tags: resourceTags
   properties: {
     displayName: '${containerAppName} p95 request latency'
     description: 'Fires when p95 request duration exceeds 1500ms over a 15 minute window. Container Apps platform metrics only support avg/min/max/total, so this uses the Application Insights requests log for a true percentile.'
@@ -175,7 +186,7 @@ resource p95LatencyAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-prev
 resource availabilityTest 'Microsoft.Insights/webtests@2022-06-15' = {
   name: webTestName
   location: location
-  tags: union(tags, {
+  tags: union(resourceTags, {
     'hidden-link:${applicationInsightsId}': 'Resource'
   })
   kind: 'standard'
@@ -220,7 +231,7 @@ resource availabilityTest 'Microsoft.Insights/webtests@2022-06-15' = {
 resource availabilityAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: '${webTestName}-alert'
   location: 'global'
-  tags: tags
+  tags: resourceTags
   properties: {
     description: 'Fires when the /health synthetic availability test fails from 2 or more locations within 5 minutes.'
     severity: 1
