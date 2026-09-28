@@ -551,11 +551,13 @@ restricted to default-branch schedule/manual runs, serialized with workflow
 concurrency, and never uses `pull_request_target` or executes PR-supplied scripts
 with write privileges.
 
-Dependabot alert access is not guaranteed with `GITHUB_TOKEN`; GitHub does not
-offer a `dependabot: read` Actions permission. Alert 403/404 responses are shown
-as **unavailable**, not zero. The local baseline's authenticated user may see
-data the scheduled token cannot. No additional secret is requested to work around
-this. Code-scanning availability also depends on the enabled feature and token.
+`security-events: read` covers code-scanning alerts only. Dependabot alerts need
+the separate `GITHUB_TOKEN` permission `vulnerability-alerts: read`, which this
+collector does not request yet, so its Dependabot source may show as unavailable.
+The dependency governance report requests it (see "Dependency governance"); adding
+it here is a separate follow-up. Alert 403/404 responses are shown as
+**unavailable**, not zero. The local baseline's authenticated user may see data
+the scheduled token cannot. No additional secret is requested to work around this. Code-scanning availability also depends on the enabled feature and token.
 
 Required-source failures, malformed/incomplete pagination, rate limits after
 bounded retries, and unknown deployment job mappings fail collection and preserve
@@ -821,7 +823,10 @@ Every Monday at 9 AM UTC (configurable), a GitHub Action workflow runs:
 The script requires GitHub OIDC token authentication (`GH_TOKEN` or `GITHUB_TOKEN` environment variable) and these minimal permissions:
 - `contents: read` (to identify the repository)
 - `security-events: read` (to access CodeQL alerts; required from day one)
+- `vulnerability-alerts: read` (to list Dependabot alerts; `security-events` covers code scanning only, and without this permission the Dependabot endpoint returns HTTP 403 even when Dependabot alerts are enabled)
 - `pull-requests: read` (to list Dependabot PRs)
+
+No personal access token, GitHub App, or additional secret is used. If Dependabot still shows as unavailable, confirm that Dependabot alerts are enabled under **Settings > Code security and analysis**. That is a change for the owner to make; this workflow never makes it.
 
 **Failure mode:** If collection fails (e.g. `security-events: read` not granted), the workflow fails closed and appends an error message to the step summary. It never reports a fabricated "0 alerts" or suppresses the error. This mirrors `scripts/sdlc_metrics.py`'s alert-handling pattern.
 
