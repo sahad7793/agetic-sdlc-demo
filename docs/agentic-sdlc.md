@@ -510,6 +510,9 @@ are `N/A`, never a fabricated zero-hour duration or 100% reliability.
 | Metric | Population, numerator, denominator | Exclusions and limits |
 | --- | --- | --- |
 | PR cycle time | Main-target PRs merged within the window; median elapsed hours from PR creation to merge, with sample count. | Includes draft/review waiting. Excludes unmerged PRs, other target branches, and negative durations. Author cohorts show Dependabot, explicitly named Copilot agent accounts, and other/unknown; the latter does not mean human-only. |
+| Rework | Per main PR merged within the window: median submitted non-comment reviews (review-round proxy), changes-requested reviews, and commits after the first review's commit SHA; also count titles starting with `Revert`. Each median includes its PR sample count. | Commits-after-review uses PR commit ordering relative to the first reviewed SHA, not a timestamped push event. Missing reviewed-SHA/commit evidence is unavailable, not zero. |
+| Escaped-defect candidates | Issues opened in the window labeled `bug`, or labeled `incident`/`sev1`/`sev2`/`sev3`/`sev4`; report bugs and incidents separately and total unique issues. Show per-merged-PR counts, unattributed counts, and agent/human/unknown authorship splits. | Explicit same-repository issue-to-PR timeline references take precedence. Otherwise, attribute to the latest preceding main merge within 30 days as a **heuristic**, not proof of causation. Each issue is assigned at most once. Bot/Copilot authors and PRs with a `Co-authored-by: Copilot` trailer are agents; named non-agent authors are human; missing authors are unknown. |
+| Agent audit trail | Agent-authored PRs created or merged in the window, including PR number, author, approving reviewers, merger, and matching gh-aw run IDs/URLs; also list gh-aw runs started in the window. | Read-only normalized API metadata only. No PR/issue bodies, prompts, secrets, review text, or tool-call logs. Full prompts/tool calls remain in originating session history; Actions details remain in GitHub Actions logs, subject to their access and retention. |
 | Issue-to-merge lead time | Explicit same-repository `closingIssuesReferences`; one sample per issue at its earliest linked main merge, assigned to that merge's window; median hours from issue creation. | No prose parsing, chronological guesses, or external issue references. A linked PR is not evidence that every requirement was delivered. Negative durations are excluded and counted. |
 | Issue-link coverage | Main PRs merged in the window with at least one valid same-repository closing link / all main PRs merged in the window. | Denominator includes bots and unlinked work. Also show unique issue sample count; PR coverage and issue sample size are different quantities. |
 | Issue-to-deployment lead time | **Unavailable until trustworthy deployed-source evidence is recorded.** | The deployment workflow checks out the triggering CI SHA. Automatic environment deployment SHA and outer `workflow_run.head_sha` do not independently identify the image source under concurrent pushes. No guessed issue-to-deployment timings are reported, and no production change is made to populate this metric. |
@@ -533,7 +536,13 @@ approval waiting, are explicitly a separate inventory.
 
 - [GraphQL pull requests](https://docs.github.com/en/graphql/reference/objects#pullrequest),
   including `closingIssuesReferences`, creation/merge timestamps, base branch,
-  and author login; outer and nested connections are paginated.
+  author, and merger; outer and nested connections are paginated.
+- [REST pull-request reviews and commits](https://docs.github.com/en/rest/pulls/reviews)
+  for PRs created or merged in the last 14 days, and the issue list/timeline for
+  recently updated labeled bug/incident issues. Commit messages are read transiently
+  only to detect the Copilot trailer; issue bodies are not inspected. Evidence stores
+  only commit SHA/date/trailer flag, review state/date/SHA/reviewer, issue
+  number/date/labels/PR references, and calculated PR metadata.
 - [REST workflow runs and attempts](https://docs.github.com/en/rest/actions/workflow-runs)
   resolved by exact workflow file path, and
   [attempt-specific jobs](https://docs.github.com/en/rest/actions/workflow-jobs).
@@ -580,8 +589,9 @@ CI failure is not automatically a vulnerability or test failure.
 ### History, publication, and operation
 
 Each successful collection writes `report.md`, `report.json`, and an allowlisted
-`evidence.json` containing IDs, timestamps, outcomes, author identifiers, and issue
-links. It never archives PR/issue bodies, logs, tokens, or vulnerability payloads.
+`evidence.json` containing IDs, timestamps, outcomes, author identifiers, normalized
+review and label metadata, and issue links. It never archives PR/issue bodies, prompts,
+review text, Actions logs, session/tool-call logs, tokens, or vulnerability payloads.
 These are uploaded as `sdlc-metrics-<run_id>-<attempt>` artifacts for 90 days, subject
 to repository retention policy and manual deletion, and Markdown is included in
 the GitHub Step Summary.
@@ -630,8 +640,11 @@ and approval delays can dominate small cohorts. A comparison between two
 agent-enabled periods cannot establish that agents caused improvement. There is
 no controlled pre-agentic baseline or complete attribution of locally assisted
 work. Do not interpret these metrics as individual productivity, escaped-defect
-rate, DORA change-failure rate, MTTR, or proof of advice quality. Those require
-additional evidence that this report deliberately does not invent.
+rate, DORA change-failure rate, MTTR, or proof of advice quality. Labeled issue
+counts and 30-day PR attribution are directional signals, not a complete
+escaped-defect rate. Cost per story is out of scope because cost-governance access
+and trustworthy story-level cost allocation are not configured; it remains future
+work rather than an inferred or zero-valued metric.
 
 ## Cost governance
 
