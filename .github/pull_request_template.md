@@ -6,6 +6,12 @@
 
 Closes #
 
+<!-- If this approved change does not need an issue, add a separate line:
+No-Issue: brief reason. -->
+
+Follow the [agent security policy](../docs/agent-security-policy.md) when using
+agents or processing external content.
+
 ## Validation
 
 <!-- List tests run and tests added or updated. -->

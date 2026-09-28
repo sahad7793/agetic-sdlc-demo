@@ -11,6 +11,25 @@ This repository uses agents to accelerate implementation and review, while peopl
 5. A human reviewer uses the PR template, code review, test results, and any advisory agent review to check architecture, validation, business rules, and regression coverage.
 6. After required CI checks are green and a human approval is present, a human merges the PR. Agents never approve or merge pull requests by themselves.
 
+See the [agent security policy](agent-security-policy.md) for safeguards
+against prompt injection and for the boundaries on permissions, secrets, and
+human approvals.
+
+### Pull request issue-link check
+
+The **Issue link check** workflow is an advisory validation of pull request
+bodies. It accepts an issue reference (such as `Fixes #123`, `Closes #123`,
+`Refs #123`, or a GitHub issue URL), an explicit `No-Issue: <brief reason>`
+line, or a Dependabot-authored PR. The exception lets humans document why a
+change has no tracking issue.
+
+This `pull_request` workflow has only `contents: read` and
+`pull-requests: read` permissions. It checks out the PR's base revision and
+passes the PR body to the checker as data; it does not check out or execute PR
+content. The check is advisory by default and is **not** included in the
+repository ruleset's required checks. Making it required is an owner decision
+and requires an explicit ruleset change.
+
 ## Delivery and deployment
 
 `main` deployments are handled by the **Deploy** workflow only after the **CI** workflow has completed successfully. It uses GitHub Actions OIDC to build the API once in Azure Container Registry (ACR), captures the immutable image digest, deploys that digest to `staging`, and verifies the `/health` endpoint. The `production` job then deploys the **same** digest; it is blocked by the GitHub Environment required-reviewer rule.
