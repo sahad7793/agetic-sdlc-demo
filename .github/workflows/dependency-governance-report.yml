@@ -50,9 +50,9 @@ jobs:
 
       - name: Collect dependency governance data
         run: |
-          python3 scripts/dependency_governance_report.py \
-            --repo ${{ github.repository }} \
-            --output-dir /tmp/governance-report
+          python3 scripts/dependency_governance_report.py collect \
+            --repository "${{ github.repository }}" \
+            --output /tmp/governance-report
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
