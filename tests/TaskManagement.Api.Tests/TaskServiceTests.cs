@@ -131,6 +131,68 @@ public class TaskServiceTests
         result.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task GetAllAsync_AppliesExclusiveDateAndStatusFiltersAndExcludesTasksWithoutDueDate()
+    {
+        var dueBefore = new DateTime(2030, 1, 1);
+        var dueAfter = new DateTime(2029, 1, 1);
+        var matchingTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "Matching",
+            Status = TaskItemStatus.InProgress,
+            DueDate = new DateTime(2029, 6, 1),
+            CreatedAt = DateTime.UtcNow
+        };
+        var repository = new FakeTaskRepository
+        {
+            Tasks =
+            [
+                matchingTask,
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "At lower bound",
+                    Status = TaskItemStatus.InProgress,
+                    DueDate = dueAfter,
+                    CreatedAt = DateTime.UtcNow
+                },
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "At upper bound",
+                    Status = TaskItemStatus.InProgress,
+                    DueDate = dueBefore,
+                    CreatedAt = DateTime.UtcNow
+                },
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "No due date",
+                    Status = TaskItemStatus.InProgress,
+                    CreatedAt = DateTime.UtcNow
+                },
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Wrong status",
+                    Status = TaskItemStatus.Todo,
+                    DueDate = matchingTask.DueDate,
+                    CreatedAt = DateTime.UtcNow
+                }
+            ]
+        };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetAllAsync(
+            TaskItemStatus.InProgress,
+            dueBefore,
+            dueAfter,
+            CancellationToken.None);
+
+        result.Should().ContainSingle(task => task.Id == matchingTask.Id);
+    }
+
     private static TaskService CreateService() =>
         new(new FakeTaskRepository(), NullLogger<TaskService>.Instance);
 
@@ -139,9 +201,27 @@ public class TaskServiceTests
         public TaskItem? Task { get; set; }
         public List<TaskItem> Tasks { get; set; } = [];
 
-        public Task<IReadOnlyList<TaskItem>> GetAllAsync(TaskItemStatus? status, CancellationToken cancellationToken) =>
-            System.Threading.Tasks.Task.FromResult<IReadOnlyList<TaskItem>>(
-                Task is null ? [] : [Task]);
+        public Task<IReadOnlyList<TaskItem>> GetAllAsync(
+            TaskItemStatus? status,
+            DateTime? dueBefore,
+            DateTime? dueAfter,
+            CancellationToken cancellationToken)
+        {
+            IEnumerable<TaskItem> tasks = Tasks;
+            if (Task is not null)
+            {
+                tasks = tasks.Append(Task);
+            }
+
+            return System.Threading.Tasks.Task.FromResult<IReadOnlyList<TaskItem>>(
+                tasks
+                    .Where(task => status is null || task.Status == status)
+                    .Where(task => dueBefore is null ||
+                        (task.DueDate.HasValue && task.DueDate.Value < dueBefore.Value))
+                    .Where(task => dueAfter is null ||
+                        (task.DueDate.HasValue && task.DueDate.Value > dueAfter.Value))
+                    .ToList());
+        }
 
         public Task<IReadOnlyList<TaskItem>> GetWithDueDateBeforeAsync(DateTime dueBefore, CancellationToken cancellationToken) =>
             System.Threading.Tasks.Task.FromResult<IReadOnlyList<TaskItem>>(

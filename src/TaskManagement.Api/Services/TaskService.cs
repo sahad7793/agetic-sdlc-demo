@@ -6,9 +6,13 @@ namespace TaskManagement.Api.Services;
 
 public class TaskService(ITaskRepository repository, ILogger<TaskService> logger) : ITaskService
 {
-    public async Task<IReadOnlyList<TaskResponse>> GetAllAsync(TaskItemStatus? status, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<TaskResponse>> GetAllAsync(
+        TaskItemStatus? status,
+        DateTime? dueBefore,
+        DateTime? dueAfter,
+        CancellationToken cancellationToken)
     {
-        var tasks = await repository.GetAllAsync(status, cancellationToken);
+        var tasks = await repository.GetAllAsync(status, dueBefore, dueAfter, cancellationToken);
         return tasks.Select(Map).ToList();
     }
 

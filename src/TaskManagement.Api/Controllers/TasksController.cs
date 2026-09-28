@@ -13,9 +13,11 @@ public class TasksController(ITaskService service, ILogger<TasksController> logg
     [ProducesResponseType(typeof(IReadOnlyList<TaskResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<TaskResponse>>> GetAll(
         [FromQuery] TaskItemStatus? status,
+        [FromQuery] DateTime? dueBefore,
+        [FromQuery] DateTime? dueAfter,
         CancellationToken cancellationToken)
     {
-        return Ok(await service.GetAllAsync(status, cancellationToken));
+        return Ok(await service.GetAllAsync(status, dueBefore, dueAfter, cancellationToken));
     }
 
     [HttpGet("overdue")]
