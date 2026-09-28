@@ -24,6 +24,9 @@ jobs:
       - name: Test custom agent definitions
         run: python3 -m unittest discover -s tests/agent_definitions
 
+      - name: Test agentic workflow contracts
+        run: python3 -m unittest discover -s tests/agentic_workflows
+
       - name: Test rollback contracts
         run: python3 -m unittest discover -s tests/rollback
 
