@@ -82,6 +82,8 @@ def decide_transition(current_stages, requested_stage, actor, permission, stage_
     if requested_stage in APPROVAL_STAGES:
         if is_bot_actor(actor):
             return Transition(False, "approval-by-bot", allowed)
+        if permission == "unavailable":
+            return Transition(False, "approval-permission-unavailable", allowed)
         if (permission or "").casefold() not in WRITE_PERMISSIONS:
             return Transition(False, "approval-without-write-permission", allowed)
     return Transition(True, "accepted", allowed)
@@ -95,7 +97,7 @@ class GitHubApi:
         self.repository = repository
         self.api_url = api_url.rstrip("/")
 
-    def request(self, method, path, payload=None, missing_ok=False):
+    def request(self, method, path, payload=None, missing_ok=False, forbidden_ok=False):
         url = f"{self.api_url}{path}"
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(url, data=data, method=method)
@@ -112,6 +114,8 @@ class GitHubApi:
         except urllib.error.HTTPError as error:
             if missing_ok and error.code == 404:
                 return None
+            if forbidden_ok and error.code == 403:
+                return {"permission_check_unavailable": True}
             details = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"GitHub API {method} {path} failed with HTTP {error.code}: {details}"
@@ -128,7 +132,10 @@ class GitHubApi:
             "GET",
             f"/repos/{self.repository}/collaborators/{encoded_actor}/permission",
             missing_ok=True,
+            forbidden_ok=True,
         )
+        if response and response.get("permission_check_unavailable"):
+            return "unavailable"
         return response.get("permission") if response else None
 
     def remove_issue_label(self, issue_number, label):
@@ -192,6 +199,13 @@ def _rejection_comment(requested_stage, decision):
         return (
             f"`{requested_stage}` is a human approval gate and requires repository "
             "write, maintain, or admin permission. The attempted label was removed."
+        )
+    if decision.reason == "approval-permission-unavailable":
+        return (
+            f"`{requested_stage}` is a human approval gate, but the router could not "
+            "verify repository permission through the collaborator API. The attempted "
+            "label was removed; a maintainer must resolve the workflow token's API "
+            "permission before this gate can advance."
         )
     if decision.reason == "multiple-current-stages":
         return (

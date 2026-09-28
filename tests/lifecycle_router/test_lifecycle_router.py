@@ -84,6 +84,17 @@ class ApprovalGateTests(unittest.TestCase):
         self.assertFalse(transition.valid)
         self.assertEqual(transition.reason, "approval-by-bot")
 
+    def test_unavailable_permission_check_fails_closed(self):
+        transition = lifecycle_router.decide_transition(
+            ["stage:plan-ready"],
+            "stage:plan-approved",
+            "human",
+            "unavailable",
+            STAGES,
+        )
+        self.assertFalse(transition.valid)
+        self.assertEqual(transition.reason, "approval-permission-unavailable")
+
 
 class BotDetectionTests(unittest.TestCase):
     def test_detects_github_and_copilot_bots_case_insensitively(self):
@@ -154,6 +165,22 @@ class RoutingInvariantTests(unittest.TestCase):
         api.collaborator_permission.assert_called_once_with("human")
         api.remove_issue_label.assert_called_once_with(123, "stage:spec-approved")
         self.assertIn("requires repository write", api.comment.call_args.args[1])
+
+    def test_unavailable_permission_check_removes_gate_and_explains_blocker(self):
+        api = Mock()
+        api.issue.return_value = {
+            "labels": [{"name": "stage:plan-ready"}, {"name": "stage:plan-approved"}]
+        }
+        api.collaborator_permission.return_value = "unavailable"
+        event = {
+            "issue": {"number": 123},
+            "label": {"name": "stage:plan-approved"},
+            "sender": {"login": "human"},
+        }
+        result = lifecycle_router.route_issue(api, event, lifecycle_router.load_label_definitions())
+        self.assertEqual(result, "rejected")
+        api.remove_issue_label.assert_called_once_with(123, "stage:plan-approved")
+        self.assertIn("could not verify repository permission", api.comment.call_args.args[1])
 
     def test_rejected_transition_removes_only_the_attempted_label(self):
         api = Mock()

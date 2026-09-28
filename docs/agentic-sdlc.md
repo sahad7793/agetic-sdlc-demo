@@ -42,6 +42,12 @@ The router removes invalid labels, explains allowed transitions, removes the
 previous stage after a valid transition, and comments with the next owner.
 Issue content is treated only as data; this workflow does not execute it.
 
+The router keeps its token to `issues: write` and `contents: read` as required
+by the repository's least-privilege boundary. GitHub may deny the collaborator
+permission API at that scope; when permission cannot be verified, the router
+removes the attempted approval label and comments that the gate is blocked.
+Do not widen the workflow token without an explicit maintainer decision.
+
 ```mermaid
 stateDiagram-v2
     [*] --> NeedsSpec: issue opened / stage:needs-spec
