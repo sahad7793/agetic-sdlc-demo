@@ -71,41 +71,35 @@ class RunPlanTests(unittest.TestCase):
         return {key: value for key, value in values.items() if value is not None}
 
     def test_manual_dry_run_needs_only_polling_opt_in(self):
-        self.assertEqual(alert_to_issue.run_plan(self.environment()), (True, False))
+        self.assertEqual(alert_to_issue.run_plan(self.environment()), (True, False, None))
 
     def test_manual_publish_requires_independent_publish_opt_in(self):
         with self.assertRaisesRegex(ValueError, "publication is not explicitly enabled"):
             alert_to_issue.run_plan(self.environment(ALERT_PUBLISH_REQUESTED="true"))
-        self.assertEqual(
-            alert_to_issue.run_plan(self.environment(
-                ALERT_PUBLISH_REQUESTED="true", AZURE_ALERTS_PUBLISH_ENABLED="true"
-            )),
-            (True, True),
-        )
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
+            ALERT_PUBLISH_REQUESTED="true", AZURE_ALERTS_PUBLISH_ENABLED="true",
+            ALERT_FINGERPRINT_TARGET="a" * 64
+        ))
+        self.assertEqual((ready, publish), (True, True))
 
-    def test_schedule_is_skipped_without_publish_opt_in(self):
+    def test_schedule_is_skipped_without_schedule_opt_in(self):
         for value in (None, "", "false", "yes"):
-            self.assertEqual(
-                alert_to_issue.run_plan(self.environment(
-                    ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED=value
-                )),
-                (False, False),
-            )
-        self.assertEqual(
-            alert_to_issue.run_plan(self.environment(
-                ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED="true"
-            )),
-            (True, True),
-        )
+            ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
+                ALERT_TRIGGER="schedule", AZURE_ALERTS_SCHEDULE_ENABLED=value,
+                AZURE_ALERTS_PUBLISH_ENABLED="true"
+            ))
+            self.assertEqual((ready, publish, fingerprint), (False, False, None))
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
+            ALERT_TRIGGER="schedule", AZURE_ALERTS_SCHEDULE_ENABLED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="false"
+        ))
+        self.assertEqual((ready, publish, fingerprint), (True, True, None))
 
-    def test_missing_configuration_is_not_ready(self):
-        self.assertEqual(
-            alert_to_issue.run_plan(self.environment(AZURE_CLIENT_ID=None)), (False, False)
-        )
-        self.assertEqual(
-            alert_to_issue.run_plan(self.environment(AZURE_ALERTS_ENABLED="false")),
-            (False, False),
-        )
+    def test_invalid_configuration_fails_explicitly(self):
+        with self.assertRaisesRegex(ValueError, "Azure client ID is missing or invalid"):
+            alert_to_issue.run_plan(self.environment(AZURE_CLIENT_ID=None))
+        with self.assertRaisesRegex(ValueError, "polling is not explicitly enabled"):
+            alert_to_issue.run_plan(self.environment(AZURE_ALERTS_ENABLED="false"))
 
     def test_unknown_trigger_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "schedule or manual dispatch"):
@@ -252,7 +246,140 @@ class CollectionTests(unittest.TestCase):
         })
 
 
-class DeduplicationTests(unittest.TestCase):
+class FingerprintValidationTests(unittest.TestCase):
+    def test_rejects_invalid_fingerprint_formats(self):
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal characters"):
+            alert_to_issue.validate_fingerprint_target("not-a-hash")
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal characters"):
+            alert_to_issue.validate_fingerprint_target("aabbccdd" * 7)  # 56 chars
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal characters"):
+            alert_to_issue.validate_fingerprint_target("aabbccdd" * 8 + "00")  # 66 chars
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal characters"):
+            alert_to_issue.validate_fingerprint_target("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+
+    def test_accepts_valid_64_hex_fingerprint(self):
+        valid = "a" * 64
+        self.assertEqual(alert_to_issue.validate_fingerprint_target(valid), valid)
+        self.assertEqual(
+            alert_to_issue.validate_fingerprint_target("A" * 64),
+            "a" * 64  # Lowercase normalization
+        )
+
+    def test_accepts_empty_fingerprint_for_scheduled_runs(self):
+        self.assertIsNone(alert_to_issue.validate_fingerprint_target(""))
+        self.assertIsNone(alert_to_issue.validate_fingerprint_target(None))
+        self.assertIsNone(alert_to_issue.validate_fingerprint_target("   "))
+
+
+class ManualAlertSelectionTests(unittest.TestCase):
+    def environment(self, **overrides):
+        values = {
+            "AZURE_ALERTS_ENABLED": "true",
+            "AZURE_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000",
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_ALERT_SCOPES": "staging=rg-taskmanagement-staging",
+            "ALERT_TRIGGER": "workflow_dispatch",
+            "ALERT_PUBLISH_REQUESTED": "false",
+        }
+        values.update(overrides)
+        return {key: value for key, value in values.items() if value is not None}
+
+    def test_manual_dry_run_does_not_require_fingerprint(self):
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment())
+        self.assertEqual((ready, publish, fingerprint), (True, False, None))
+
+    def test_manual_publish_requires_fingerprint(self):
+        with self.assertRaisesRegex(ValueError, "target alert fingerprint"):
+            alert_to_issue.run_plan(self.environment(
+                ALERT_PUBLISH_REQUESTED="true",
+                AZURE_ALERTS_PUBLISH_ENABLED="true"
+            ))
+
+    def test_manual_publish_with_valid_fingerprint(self):
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
+            ALERT_PUBLISH_REQUESTED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="true",
+            ALERT_FINGERPRINT_TARGET="a" * 64
+        ))
+        self.assertEqual((ready, publish), (True, True))
+        self.assertEqual(fingerprint, "a" * 64)
+
+    def test_process_filters_alerts_by_fingerprint(self):
+        item = fixture_items()[0]
+        mapped = alert_to_issue.map_alert(item, "staging", "fixture")
+        target_fingerprint = mapped["fingerprint"]
+        
+        # With matching fingerprint
+        alerts = [(item, "staging", "fixture")]
+        counts = alert_to_issue.process(
+            alerts, publish=False, fingerprint_target=target_fingerprint, now=NOW, enforce_freshness=False
+        )
+        self.assertEqual(counts["fired"], 1)
+        
+        # With non-matching fingerprint
+        wrong_fingerprint = "b" * 64
+        with self.assertRaisesRegex(ValueError, "No alert matched"):
+            alert_to_issue.process(
+                alerts, publish=False, fingerprint_target=wrong_fingerprint, now=NOW, enforce_freshness=False
+            )
+
+    def test_process_fails_on_multiple_matching_fingerprints(self):
+        item = fixture_items()[0]
+        mapped = alert_to_issue.map_alert(item, "staging", "fixture")
+        target_fingerprint = mapped["fingerprint"]
+        
+        # Two alerts with same fingerprint should fail
+        alerts = [(item, "staging", "fixture"), (item, "production", "fixture")]
+        with self.assertRaisesRegex(ValueError, "Multiple alerts matched"):
+            alert_to_issue.process(
+                alerts, publish=False, fingerprint_target=target_fingerprint, now=NOW, enforce_freshness=False
+            )
+
+
+class ScheduledVsManualControlTests(unittest.TestCase):
+    def environment(self, **overrides):
+        values = {
+            "AZURE_ALERTS_ENABLED": "true",
+            "AZURE_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000",
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_ALERT_SCOPES": "staging=rg-taskmanagement-staging",
+            "ALERT_TRIGGER": "schedule",
+        }
+        values.update(overrides)
+        return {key: value for key, value in values.items() if value is not None}
+
+    def test_legacy_publish_flag_does_not_enable_schedule(self):
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
+            AZURE_ALERTS_PUBLISH_ENABLED="true"
+        ))
+        self.assertEqual((ready, publish, fingerprint), (False, False, None))
+
+    def test_schedule_can_use_new_schedule_enabled_flag(self):
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
+            AZURE_ALERTS_SCHEDULE_ENABLED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="false"
+        ))
+        self.assertEqual((ready, publish, fingerprint), (True, True, None))
+
+    def test_scheduled_publish_gate_uses_only_schedule_flag(self):
+        alert_to_issue.require_publishing_enabled(self.environment(
+            AZURE_ALERTS_SCHEDULE_ENABLED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="false"
+        ))
+        with self.assertRaisesRegex(ValueError, "Scheduled Azure alert issue publication"):
+            alert_to_issue.require_publishing_enabled(self.environment(
+                AZURE_ALERTS_SCHEDULE_ENABLED="false",
+                AZURE_ALERTS_PUBLISH_ENABLED="true"
+            ))
+
+    def test_schedule_skipped_without_schedule_flag(self):
+        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment())
+        self.assertEqual((ready, publish, fingerprint), (False, False, None))
+
+
+
     def test_publish_skips_existing_fingerprint_and_creates_only_once(self):
         alerts = [(fixture_items()[0], "staging", "fixture")]
         mapped = alert_to_issue.map_alert(fixture_items()[0], "staging", "fixture")
