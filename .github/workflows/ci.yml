@@ -7,6 +7,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
   security-events: write
 
@@ -23,6 +24,9 @@ jobs:
 
       - name: Test custom agent definitions
         run: python3 -m unittest discover -s tests/agent_definitions
+
+      - name: Test CI workflow permissions
+        run: python3 -m unittest discover -s tests/ci_workflow
 
       - name: Test agentic workflow contracts
         run: python3 -m unittest discover -s tests/agentic_workflows
