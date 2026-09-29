@@ -443,12 +443,84 @@ not a measurement of anything — the issue body says so explicitly:
 ### Limits
 
 This is a lightweight GitHub-native record, not a paging/on-call product: it
-does not page anyone, does not integrate with PagerDuty/Opsgenie, and does not
-read alert state from Azure. "Filed" is not the same as "acknowledged in
-production" — the assignee and checklist are the auditable record of who is
-responding and when, based on what the operator reports. Treat the SLA table
-as policy, and the alert-context fields as exactly what was typed in — verify
-independently before acting on them for anything safety-critical.
+does not page anyone and does not integrate with PagerDuty/Opsgenie. This
+human-initiated workflow does not read alert state from Azure. "Filed" is not
+the same as "acknowledged in production" — the assignee and checklist are the
+auditable record of who is responding and when, based on what the operator
+reports. Treat the SLA table as policy, and the alert-context fields as
+exactly what was typed in — verify independently before acting on them for
+anything safety-critical.
+
+### Automated Azure Monitor alert polling (`o1-alert-to-issue`)
+
+`.github/workflows/azure-alert-to-issue.yml` complements the manual workflow
+with a two-hour scheduled poll of explicitly configured Azure Monitor alert
+scopes. It queries the Alerts Management REST API for the previous 24 hours
+and creates a GitHub incident only for instances whose current monitor
+condition is `Fired`. Requests select only required essential fields and
+exclude alert context and egress configuration. Runs are serialized. Every
+issue carries a stable SHA-256 fingerprint of the Azure alert instance
+identity; the poller checks
+open and closed issues for that marker before creating anything. The issue
+scan is limited to 1,000 issues and the Azure poll is limited to 10 scopes,
+five API pages per scope, and 500 alerts per run. If a limit or API error
+prevents a complete read/dedup scan, the workflow fails closed without
+creating new issues. The 24-hour query window means alerts older than that
+aren't recovered after a longer polling outage. GitHub scheduled runs can
+also be delayed; the existing Azure action-group email remains the timely
+notification channel. The two-hour cadence avoids spending included runner
+minutes on higher-frequency polling in this private GitHub Free repository.
+
+The poller only copies the configured environment, a mapped severity, the
+alert instance start time, and the hashed fingerprint. It omits all
+alert-controlled text (including rule names), descriptions, resource
+identifiers, custom dimensions, and alert context so untrusted metadata is
+not passed to downstream issue automation. Azure responses and GitHub API
+output are never written to workflow logs. Severity mapping is fixed: Azure
+`Sev0` → incident `Sev1 - Critical`, `Sev1` → `Sev2 - High`, `Sev2` →
+`Sev3 - Moderate`, and `Sev3`/`Sev4` → `Sev4 - Low`. Unknown severity,
+malformed timestamps, and resolved alerts are skipped.
+
+The poller is **disabled until explicitly configured**. The scheduled
+configuration-check job does not start unless the repository-level Actions
+variable `AZURE_ALERTS_ENABLED` is exactly `true`, so an unconfigured private
+repository does not spend runner minutes on recurring checks. That
+configuration job uses only `contents: read` and does not authenticate to
+Azure or call GitHub's issue API. The poll job is skipped unless the
+`azure-alerts` GitHub Environment also has all required identity/scope
+variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `AZURE_ALERTS_ENABLED` (repository-level Actions variable) | Explicit opt-in switch; set to `true` only after setup is reviewed. |
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (in `azure-alerts`) | Non-secret Entra identity and subscription identifiers used by `azure/login` with GitHub OIDC. |
+| `AZURE_ALERT_SCOPES` (in `azure-alerts`) | Comma-separated `environment=resource-group` entries, e.g. `staging=rg-taskmanagement-staging-centralus,production=rg-taskmanagement-production-westus2`. Up to 10 scopes; only `staging`, `production`, and `shared` environments are accepted. |
+
+Create a dedicated Entra application or user-assigned managed identity and a
+federated credential restricted to this repository and the `azure-alerts`
+GitHub Environment; no client secret is used. This repository may use
+Enterprise Managed User OIDC subject formatting, so inspect the actual
+subject claim rather than assuming the standard GitHub subject string (see
+"Operator configuration"). Grant the identity read-only access only to the
+configured resource groups using a custom role limited to
+`Microsoft.AlertsManagement/alerts/read` at those resource-group scopes. Do
+not reuse the deployment identities, grant subscription-wide `Reader`, or
+expand Azure permissions automatically if the API denies access. Confirm
+the least-privilege role and scope with an Azure administrator before
+enabling the poller.
+
+GitHub permissions are empty at workflow scope. The offline fixture and
+configuration-check jobs get `contents: read` only; the live poll job gets
+`contents: read`, `id-token: write`, and `issues: write` only. The existing
+`incident` and `sev1`–`sev4` labels are reused (and created only if missing,
+following the manual incident workflow's convention). Scheduled runs publish issues after
+Azure setup is enabled. Manual dispatch defaults to a synthetic fixture that
+does not authenticate to Azure or write to GitHub; live poll dispatches are
+dry-run unless `publish` is explicitly selected. The fixture is test data,
+not a fabricated live alert. This automation does not acknowledge/close an
+Azure alert, page responders, or trigger rollback/remediation.
+
+For setup details, see Microsoft's [Azure Monitor alert-instance guidance](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-manage-alert-instances), [Alerts Management `Get All` API](https://learn.microsoft.com/en-us/rest/api/alerts-management/alerts/alerts/get-all?view=rest-alerts-management-alerts-2019-03-01), [Azure Monitor RBAC actions](https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/monitor), and [GitHub Actions OIDC with Azure](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect). No live Azure credentials or resources are required to run the fixture and unit tests. The original gap tracker was not present in this workspace, so this documentation records the implemented item.
 
 ## OpenAPI contract change reporting
 

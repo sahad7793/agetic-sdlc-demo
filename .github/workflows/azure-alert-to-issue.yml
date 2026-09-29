@@ -1,0 +1,110 @@
+name: Azure Alert to Incident Issue
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run the local synthetic fixture or poll configured Azure scopes
+        type: choice
+        options: [fixture, poll]
+        default: fixture
+        required: true
+      publish:
+        description: Create issues from live alerts (poll mode only; scheduled runs publish)
+        type: boolean
+        default: false
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: azure-alert-to-issue
+  cancel-in-progress: false
+
+jobs:
+  fixture:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'fixture'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Inspect the synthetic alert fixture (offline, no writes)
+        run: python3 scripts/azure_alert_to_issue.py poll --fixture tests/azure_alert_to_issue/fixtures/fired_alert.json
+
+  configuration:
+    if: >-
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.mode == 'poll')) &&
+      vars.AZURE_ALERTS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: azure-alerts
+    permissions:
+      contents: read
+    outputs:
+      ready: ${{ steps.config.outputs.ready }}
+    env:
+      AZURE_ALERTS_ENABLED: ${{ vars.AZURE_ALERTS_ENABLED }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check explicit opt-in and non-secret configuration
+        id: config
+        run: python3 scripts/azure_alert_to_issue.py configuration --output "$GITHUB_OUTPUT"
+
+  poll:
+    needs: configuration
+    if: needs.configuration.result == 'success' && needs.configuration.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: azure-alerts
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ALERTS_ENABLED: ${{ vars.AZURE_ALERTS_ENABLED }}
+      AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUNNER_TEMP: ${{ runner.temp }}
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Poll fired alerts and create deduplicated issues
+        env:
+          PUBLISH_ALERTS: ${{ github.event_name == 'schedule' || inputs.publish }}
+        run: |
+          if [ "$PUBLISH_ALERTS" = "true" ]; then
+            python3 scripts/azure_alert_to_issue.py poll --publish
+          else
+            python3 scripts/azure_alert_to_issue.py poll
+          fi

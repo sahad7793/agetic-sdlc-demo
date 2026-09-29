@@ -40,6 +40,9 @@ jobs:
       - name: Test incident-response contracts
         run: python3 -m unittest discover -s tests/incident_response
 
+      - name: Test Azure alert-to-issue contracts
+        run: python3 -m unittest discover -s tests/azure_alert_to_issue
+
       - name: Test release-notes contracts
         run: python3 -m unittest discover -s tests/release_notes
 

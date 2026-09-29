@@ -1,0 +1,30 @@
+{
+  "value": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/fixture/providers/Microsoft.AlertsManagement/alerts/fixture-alert-01",
+      "properties": {
+        "essentials": {
+          "alertRule": "Synthetic high error rate",
+          "severity": "Sev1",
+          "monitorCondition": "Fired",
+          "startDateTime": "2026-09-29T06:00:00Z",
+          "description": "Synthetic fixture only. Never a live alert."
+        },
+        "alertContext": {
+          "test": "This untrusted context must not be copied to an issue."
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/fixture/providers/Microsoft.AlertsManagement/alerts/resolved-alert",
+      "properties": {
+        "essentials": {
+          "alertRule": "Synthetic resolved alert",
+          "severity": "Sev2",
+          "monitorCondition": "Resolved",
+          "startDateTime": "2026-09-29T06:00:00Z"
+        }
+      }
+    }
+  ]
+}
