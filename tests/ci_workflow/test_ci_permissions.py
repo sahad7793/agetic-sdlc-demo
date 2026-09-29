@@ -27,14 +27,14 @@ class CiWorkflowPermissionTests(unittest.TestCase):
             },
         )
 
-    def test_codeql_analysis_does_not_upload_results(self):
+    def test_codeql_analysis_uploads_results(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertRegex(
             text,
             r"(?m)^      - name: Analyze CodeQL database\n"
             r"        uses: github/codeql-action/analyze@v4\n"
             r"        with:\n"
-            r"          upload: false$",
+            r"          upload: true$",
         )
 
     def test_coverage_report_runs_after_tests_and_before_artifact_upload(self):
