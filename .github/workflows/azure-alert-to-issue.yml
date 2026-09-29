@@ -83,17 +83,18 @@ jobs:
     outputs:
       ready: ${{ steps.config.outputs.ready }}
       publish: ${{ steps.config.outputs.publish }}
+      fingerprint: ${{ steps.config.outputs.fingerprint }}
     env:
       AZURE_ALERTS_ENABLED: ${{ vars.AZURE_ALERTS_ENABLED }}
-      AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}
       AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}
+      AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
       ALERT_TRIGGER: ${{ github.event_name }}
       ALERT_PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
-      ALERT_FINGERPRINT: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}
+      ALERT_FINGERPRINT_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}
     steps:
       - name: Check out trusted source
         uses: actions/checkout@v7
@@ -144,7 +145,10 @@ jobs:
       needs.configuration.result == 'success' &&
       needs.configuration.outputs.ready == 'true' &&
       needs.configuration.outputs.publish == 'true' &&
-      vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'
+      ((github.event_name == 'schedule' &&
+        vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true' &&
+        vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: azure-alerts
@@ -157,11 +161,11 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_ALERTS_ENABLED: ${{ vars.AZURE_ALERTS_ENABLED }}
-      AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}
       AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}
+      AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}
       AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
       ALERT_TRIGGER: ${{ github.event_name }}
-      ALERT_FINGERPRINT: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}
+      ALERT_FINGERPRINT_TARGET: ${{ needs.configuration.outputs.fingerprint }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
