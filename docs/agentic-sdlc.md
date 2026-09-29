@@ -32,6 +32,15 @@ outputs, tool limits, and forbidden actions are defined in each profile;
 humans retain approval, merge, deployment, release-publication, and rollback
 authority.
 
+For design-impacting proposals, the planning agent's plan includes a
+`Design impact & threat review`, classifies API/contract, schema/migration,
+identity, infrastructure, workflow/permission, dependency, and integration
+changes, and relates relevant STRIDE scenarios to the
+[current threat model](threat-model.md). The review is advisory; humans retain
+design and ADR approval. Use the
+[threat-model template](templates/threat-model-template.md) when documenting
+design-impacting changes.
+
 ### Issue lifecycle labels
 
 The issue lifecycle router advances one `stage:*` label at a time. A transition
