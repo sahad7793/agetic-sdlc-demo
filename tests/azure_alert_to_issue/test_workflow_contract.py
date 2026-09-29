@@ -37,35 +37,79 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
         self.assertIn("options: [fixture, poll]", text)
         self.assertIn("default: false", text)
 
+    def _job(self, name, following):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        body = text.split(f"  {name}:\n", 1)[1]
+        return body.split(f"  {following}:\n", 1)[0] if following else body
+
+    def _permissions(self, job):
+        block = re.search(
+            r"(?m)^    permissions:\n(?P<body>(?:      [a-z-]+: [a-z]+\n)+)", job
+        )
+        self.assertIsNotNone(block)
+        return dict(re.findall(r"(?m)^      ([a-z-]+): ([a-z]+)$", block.group("body")))
+
     def test_permissions_are_minimal_and_scoped_to_jobs(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("permissions: {}", text)
-        poll_job = text.split("  poll:\n", 1)[1]
-        permission_block = re.search(
-            r"(?m)^    permissions:\n(?P<body>(?:      [a-z-]+: [a-z]+\n)+)",
-            poll_job,
-        )
-        self.assertIsNotNone(permission_block)
-        permissions = dict(re.findall(
-            r"(?m)^      ([a-z-]+): ([a-z]+)$", permission_block.group("body")
-        ))
+        self.assertNotIn("\n  poll:\n", text)
         self.assertEqual(
-            permissions,
+            self._permissions(self._job("poll-publish", None)),
             {"contents": "read", "id-token": "write", "issues": "write"},
         )
-        configuration_job = text.split("  configuration:\n", 1)[1].split("  poll:\n", 1)[0]
-        self.assertIn("permissions:\n      contents: read", configuration_job)
-        self.assertNotIn("id-token: write", configuration_job)
-        self.assertNotIn("issues: write", configuration_job)
+        self.assertEqual(
+            self._permissions(self._job("poll-dry-run", "poll-publish")),
+            {"contents": "read", "id-token": "write"},
+        )
+        configuration_job = self._job("configuration", "poll-dry-run")
+        self.assertEqual(self._permissions(configuration_job), {"contents": "read"})
         self.assertIn("persist-credentials: false", text)
 
     def test_fixture_path_never_publishes_and_live_poll_uses_oidc(self):
-        text = WORKFLOW.read_text(encoding="utf-8")
-        fixture_job = text.split("  fixture:\n", 1)[1].split("  configuration:\n", 1)[0]
+        fixture_job = self._job("fixture", "configuration")
         self.assertIn("--fixture tests/azure_alert_to_issue/fixtures/fired_alert.json", fixture_job)
         self.assertNotIn("--publish", fixture_job)
-        self.assertIn("uses: azure/login@v2", text)
-        self.assertIn("PUBLISH_ALERTS:", text)
+        self.assertNotIn("azure/login", fixture_job)
+        self.assertNotIn("environment:", fixture_job)
+        for job in (self._job("poll-dry-run", "poll-publish"), self._job("poll-publish", None)):
+            self.assertIn("uses: azure/login@v2", job)
+            self.assertIn("environment: azure-alerts", job)
+            self.assertNotIn("secrets.", job)
+
+    def test_schedule_requires_independent_publish_opt_in(self):
+        condition = self._job("configuration", "poll-dry-run").split("runs-on:", 1)[0]
+        self.assertIn("vars.AZURE_ALERTS_ENABLED == 'true' &&", condition)
+        self.assertIn(
+            "(github.event_name == 'schedule' && vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true')",
+            condition,
+        )
+        self.assertIn("(github.event_name == 'workflow_dispatch' && inputs.mode == 'poll')", condition)
+        configuration_job = self._job("configuration", "poll-dry-run")
+        self.assertIn("ALERT_TRIGGER: ${{ github.event_name }}", configuration_job)
+        self.assertIn(
+            "ALERT_PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}",
+            configuration_job,
+        )
+        self.assertIn("publish: ${{ steps.config.outputs.publish }}", configuration_job)
+
+    def test_dry_run_job_cannot_create_issues(self):
+        dry_run = self._job("poll-dry-run", "poll-publish")
+        self.assertIn("needs.configuration.outputs.publish == 'false'", dry_run)
+        self.assertNotIn("--publish", dry_run)
+        self.assertNotIn("issues: write", dry_run)
+        self.assertNotIn("GH_TOKEN", dry_run)
+        self.assertNotIn("github.token", dry_run)
+        self.assertNotIn("AZURE_ALERTS_PUBLISH_ENABLED", dry_run)
+
+    def test_publish_job_requires_publish_plan_and_opt_in(self):
+        publish = self._job("poll-publish", None)
+        self.assertIn("needs.configuration.outputs.publish == 'true'", publish)
+        self.assertIn("vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'", publish)
+        self.assertIn(
+            "AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}", publish
+        )
+        self.assertIn("python3 scripts/azure_alert_to_issue.py poll --publish", publish)
+        self.assertNotIn("inputs.publish", publish)
 
 
 if __name__ == "__main__":

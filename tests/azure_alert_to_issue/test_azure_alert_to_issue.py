@@ -56,6 +56,77 @@ class ConfigurationTests(unittest.TestCase):
             alert_to_issue.validate_configuration(environment)
 
 
+class RunPlanTests(unittest.TestCase):
+    def environment(self, **overrides):
+        values = {
+            "AZURE_ALERTS_ENABLED": "true",
+            "AZURE_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000",
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_ALERT_SCOPES": "staging=rg-taskmanagement-staging",
+            "ALERT_TRIGGER": "workflow_dispatch",
+            "ALERT_PUBLISH_REQUESTED": "false",
+        }
+        values.update(overrides)
+        return {key: value for key, value in values.items() if value is not None}
+
+    def test_manual_dry_run_needs_only_polling_opt_in(self):
+        self.assertEqual(alert_to_issue.run_plan(self.environment()), (True, False))
+
+    def test_manual_publish_requires_independent_publish_opt_in(self):
+        with self.assertRaisesRegex(ValueError, "publication is not explicitly enabled"):
+            alert_to_issue.run_plan(self.environment(ALERT_PUBLISH_REQUESTED="true"))
+        self.assertEqual(
+            alert_to_issue.run_plan(self.environment(
+                ALERT_PUBLISH_REQUESTED="true", AZURE_ALERTS_PUBLISH_ENABLED="true"
+            )),
+            (True, True),
+        )
+
+    def test_schedule_is_skipped_without_publish_opt_in(self):
+        for value in (None, "", "false", "yes"):
+            self.assertEqual(
+                alert_to_issue.run_plan(self.environment(
+                    ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED=value
+                )),
+                (False, False),
+            )
+        self.assertEqual(
+            alert_to_issue.run_plan(self.environment(
+                ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED="true"
+            )),
+            (True, True),
+        )
+
+    def test_missing_configuration_is_not_ready(self):
+        self.assertEqual(
+            alert_to_issue.run_plan(self.environment(AZURE_CLIENT_ID=None)), (False, False)
+        )
+        self.assertEqual(
+            alert_to_issue.run_plan(self.environment(AZURE_ALERTS_ENABLED="false")),
+            (False, False),
+        )
+
+    def test_unknown_trigger_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "schedule or manual dispatch"):
+            alert_to_issue.run_plan(self.environment(ALERT_TRIGGER="push"))
+
+    def test_configuration_output_records_ready_and_publish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            alert_to_issue.write_configuration(output, self.environment())
+            self.assertEqual(output.read_text(encoding="utf-8"), "ready=true\npublish=false\n")
+
+    def test_publish_poll_refuses_without_publish_opt_in(self):
+        with patch.dict(alert_to_issue.os.environ, self.environment(), clear=True), \
+                patch.object(alert_to_issue.sys, "argv", ["poller", "poll", "--publish"]), \
+                patch.object(alert_to_issue, "AzureCli") as azure_cli, \
+                patch.object(alert_to_issue, "process") as process:
+            self.assertEqual(alert_to_issue.main(), 1)
+        azure_cli.assert_not_called()
+        process.assert_not_called()
+
+
 class MappingTests(unittest.TestCase):
     def test_maps_fired_severity_and_uses_stable_hashed_identity(self):
         mapped = alert_to_issue.map_alert(
