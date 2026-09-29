@@ -11,6 +11,15 @@ This repository uses agents to accelerate implementation and review, while peopl
 5. A human reviewer uses the PR template, code review, test results, and any advisory agent review to check architecture, validation, business rules, and regression coverage.
 6. After required CI checks are green and a human approval is present, a human merges the PR. Agents never approve or merge pull requests by themselves.
 
+### Test coverage reporting
+
+CI collects Coverlet Cobertura output from the .NET test project and reports
+aggregate line and branch coverage in the Actions job summary. The raw Cobertura
+reports and generated summary remain available in the `test-results` artifact.
+Coverage reporting is advisory only; it does not apply a percentage threshold or
+fail CI based on coverage. Adding a blocking threshold requires an explicit
+maintainer decision and a separate change.
+
 See the [agent security policy](agent-security-policy.md) for safeguards
 against prompt injection and for the boundaries on permissions, secrets, and
 human approvals.
