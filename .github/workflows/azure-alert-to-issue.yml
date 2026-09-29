@@ -17,12 +17,12 @@ on:
         default: fixture
         required: true
       publish:
-        description: Create issues from live alerts (poll mode only; also requires AZURE_ALERTS_PUBLISH_ENABLED)
+        description: Create issues from live alerts (requires AZURE_ALERTS_PUBLISH_ENABLED and an exact alert fingerprint)
         type: boolean
         default: false
         required: true
       alert_fingerprint:
-        description: Target specific alert by 64-hex fingerprint (manual publish only; required for publish=true)
+        description: Exact 64-character alert fingerprint required when publishing (empty for dry runs)
         type: string
         default: ""
         required: false
@@ -67,12 +67,13 @@ jobs:
         run: python3 scripts/azure_alert_to_issue.py poll --fixture tests/azure_alert_to_issue/fixtures/fired_alert.json
 
   configuration:
-    # Manual live polls need AZURE_ALERTS_ENABLED; manual publish additionally
-    # requires AZURE_ALERTS_PUBLISH_ENABLED. Scheduled publication is separately
-    # disabled unless AZURE_ALERTS_SCHEDULE_ENABLED is explicitly true.
+    # Manual live polls need AZURE_ALERTS_ENABLED; scheduled publication also
+    # requires independent schedule and publish opt-ins.
     if: >-
       vars.AZURE_ALERTS_ENABLED == 'true' &&
-      ((github.event_name == 'schedule' && vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true') ||
+      ((github.event_name == 'schedule' &&
+        vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true' &&
+        vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.mode == 'poll'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -144,7 +145,9 @@ jobs:
       needs.configuration.result == 'success' &&
       needs.configuration.outputs.ready == 'true' &&
       needs.configuration.outputs.publish == 'true' &&
-      ((github.event_name == 'schedule' && vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true') ||
+      ((github.event_name == 'schedule' &&
+        vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true' &&
+        vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true') ||
        (github.event_name == 'workflow_dispatch' && vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 15

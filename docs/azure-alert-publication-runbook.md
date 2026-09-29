@@ -11,15 +11,15 @@ This runbook explains how to trigger and monitor Azure alert-to-issue publicatio
 - **AZURE_ALERTS_PUBLISH_ENABLED**: `'true'` — Enables manual issue creation. Required for manual targeted publication; it does not enable scheduled publication.
 
 ### For Scheduled Publication Only
-- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` — Explicitly enables scheduled multi-alert publication. Unset or any value other than `'true'` disables scheduled publication, regardless of `AZURE_ALERTS_PUBLISH_ENABLED`.
+- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` — Explicitly enables the schedule. It must be used with **AZURE_ALERTS_PUBLISH_ENABLED** set to `'true'`; either unset or any value other than `'true'` disables scheduled polling and publication.
 
 | Scenario | AZURE_ALERTS_ENABLED | AZURE_ALERTS_PUBLISH_ENABLED | AZURE_ALERTS_SCHEDULE_ENABLED | Polls Run | Publishes | Notes |
 |----------|--------|----------|----------|-----------|-----------|--------|
 | **Disabled** | (any) | (any) | (any) | ❌ No | ❌ No | Entire system off |
 | **Manual poll (dry-run)** | `'true'` | (any) | (any) | ✅ Yes | ❌ No | Inspect alerts without publishing |
 | **Manual publish (targeted)** | `'true'` | `'true'` | (any) | ✅ Yes | ✅ Yes | **Requires 64-hex alert fingerprint** |
-| **Scheduled (enabled)** | `'true'` | (any) | `'true'` | ✅ Yes | ✅ Yes | Publishes all fired alerts |
-| **Scheduled (disabled)** | `'true'` | `'true'` or any | (unset/other) | ❌ No | ❌ No | Schedule is not authorized |
+| **Scheduled (enabled)** | `'true'` | `'true'` | `'true'` | ✅ Yes | ✅ Yes | Publishes all fired alerts |
+| **Scheduled (disabled)** | `'true'` | (any) | (unset/other) | ❌ No | ❌ No | Schedule is not authorized |
 
 ## Manual Targeted Publication
 
@@ -39,20 +39,20 @@ This runbook explains how to trigger and monitor Azure alert-to-issue publicatio
 
 ### Finding the Alert Fingerprint
 
-Alert fingerprints are **deterministic hashes** of alert rule name and time-series attributes. They appear in:
+Alert fingerprints are the SHA-256 hash of the Azure alert instance ID after trimming whitespace. They appear in:
 
 1. **GitHub issue body** (existing alerts already published):
-   - Look for `fingerprint: <64-hex>` in the issue description under "Alert Details"
+   - Look for the `azure-alert-fingerprint` marker; the 64-hex fingerprint is inside the marker.
 
-2. **Azure Monitor** → your alert rule → Fired Alerts tab:
-   - No fingerprint shown directly in Azure UI
-   - The poller does not log alert payloads or fingerprints. Use an existing published issue's fingerprint, or obtain the fingerprint through an approved internal process before targeted publication.
+2. **Azure Monitor** → the fired alert instance:
+   - Copy the alert instance ID and calculate its SHA-256 hash after trimming leading and trailing whitespace.
+   - The poller does not log alert payloads or fingerprints; read-only dry-run counts cannot be used to retrieve a fingerprint.
 
 ### Behavior: Manual Targeted Publish
 
-- **Accepts fingerprint**: Polls Azure, matches alert by exact 64-hex fingerprint, creates one issue if alert is new
+- **Accepts fingerprint**: Polls all configured bounded scopes, matches exactly one eligible alert by its exact 64-hex fingerprint, and creates at most that issue if it is new.
 - **Rejects ambiguous/missing fingerprints**: Fails with explicit error if:
-  - Fingerprint is empty or malformed (not 64 hex)
+  - Fingerprint is empty or malformed (not exactly 64 hex)
   - No alert matched the fingerprint
   - Multiple alerts matched the same fingerprint (collision; contact support)
 - **No success-shaped skip**: If fingerprint validation fails, the workflow run shows RED (failed) with clear error message, never green
@@ -89,11 +89,12 @@ gh workflow run azure-alert-to-issue.yml \
 
 ### How Scheduled Runs Work
 
-A **cron schedule** (`17 */2 * * *`) runs every 2 hours. It starts only when both `AZURE_ALERTS_ENABLED` and `AZURE_ALERTS_SCHEDULE_ENABLED` are `'true'`:
+A **cron schedule** (`17 */2 * * *`) runs every 2 hours. It starts only when `AZURE_ALERTS_ENABLED`, `AZURE_ALERTS_SCHEDULE_ENABLED`, and `AZURE_ALERTS_PUBLISH_ENABLED` are all `'true'`:
 
 ```
 if: AZURE_ALERTS_ENABLED == 'true' &&
-    AZURE_ALERTS_SCHEDULE_ENABLED == 'true'
+    AZURE_ALERTS_SCHEDULE_ENABLED == 'true' &&
+    AZURE_ALERTS_PUBLISH_ENABLED == 'true'
 ```
 
 When fired, publishes **all new alerts** (deduplication by fingerprint prevents re-publishing).
@@ -110,6 +111,7 @@ AZURE_ALERTS_SCHEDULE_ENABLED: false (or unset)
 ```
 AZURE_ALERTS_ENABLED: true
 AZURE_ALERTS_SCHEDULE_ENABLED: true
+AZURE_ALERTS_PUBLISH_ENABLED: true
 ```
 
 ## Guardrails and Fail-Closed Behavior
@@ -117,10 +119,10 @@ AZURE_ALERTS_SCHEDULE_ENABLED: true
 ### What Fails Closed
 
 1. **Missing AZURE_ALERTS_ENABLED**: Entire system disabled (no polls)
-2. **Manual publish without fingerprint**: Workflow run fails red with error `"Manual alert publishing requires a target alert fingerprint (64-hex)."`
+2. **Manual publish without fingerprint**: Workflow run fails red with error `"Manual issue publication requires an alert fingerprint."`
 3. **Fingerprint mismatch**:
-   - No alert matched: Error `"No alert matched fingerprint <X>"`, workflow run fails red
-   - Multiple alerts matched: Error `"Multiple alerts matched fingerprint <X>"`, workflow run fails red
+   - No alert matched: the run fails with an explicit not-found error before any GitHub API call.
+   - Multiple alerts matched: the run fails with an explicit ambiguity error before any GitHub API call.
 4. **Missing credential**: If Azure login fails, workflow fails red (no fallback or silent dry-run)
 
 ### What Does NOT Create Issues
@@ -138,15 +140,15 @@ Skipped alerts (duplicates, resolved) do not cause the workflow to fail or warn�
 
 ### Workflow Dispatch Inputs (Manual Trigger)
 
-- **mode**: `poll` or `publish` (required; controls alert polling)
+- **mode**: `fixture` or `poll` (required; controls offline fixture or live polling)
 - **publish**: `true` or `false` (required; `true` enables issue creation only for mode=poll)
-- **alert_fingerprint**: 64-hex string (optional; required if `publish=true`)
+- **alert_fingerprint**: exactly 64 hexadecimal characters (optional; required if `publish=true`)
 
 ### Repository Variables (Settings → Variables and Secrets)
 
 - **AZURE_ALERTS_ENABLED**: `'true'` (enables polling infrastructure)
 - **AZURE_ALERTS_PUBLISH_ENABLED**: `'true'` (enables manual targeted publication)
-- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` (explicitly enables scheduled multi-alert publication; unset disables it)
+- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` (explicitly enables scheduled polling/publication only in combination with `AZURE_ALERTS_PUBLISH_ENABLED`; unset disables it)
 
 Set these at the repository level in GitHub Settings. They persist across runs.
 
@@ -158,25 +160,25 @@ The workflow uses a protected environment `azure-alerts` with OIDC-based Azure l
 
 ### "publication is not explicitly enabled"
 - Manual publish: Set `AZURE_ALERTS_PUBLISH_ENABLED: 'true'` in repo variables
-- Scheduled publish: Set `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'`; `AZURE_ALERTS_PUBLISH_ENABLED` does not enable the schedule
+- Scheduled publish: Set both `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'` and `AZURE_ALERTS_PUBLISH_ENABLED: 'true'`
 
-### "Manual alert publishing requires a target alert fingerprint (64-hex)"
+### "Manual issue publication requires an alert fingerprint"
 - You triggered manual publish (`mode=poll, publish=true`) but left `alert_fingerprint` empty or provided invalid hex
-- Use the fingerprint from an existing GitHub issue body or obtain it through an approved internal process; dry-run logs intentionally do not reveal it
+- Use the fingerprint from an existing GitHub issue body or calculate it from the alert instance ID; dry-run logs intentionally do not reveal it
 - Retry with valid 64-hex fingerprint
 
-### "No alert matched fingerprint X"
-- The fingerprint doesn't exist in current Azure alerts
-- Run a dry-run to see all current fingerprints
+### "Selected alert fingerprint was not found in the eligible alerts"
+- The fingerprint doesn't identify exactly one current eligible Azure alert
+- Confirm that the alert instance ID and its hash were copied/calculated exactly
 - Verify the fingerprint was copied exactly (case-insensitive, but must be valid hex)
 
-### "Multiple alerts matched fingerprint X"
-- Rare collision (same rule + attributes); contact support
+### "Selected alert fingerprint matched multiple eligible alerts"
+- The same alert instance appeared more than once across configured scopes; review scope configuration to avoid duplicates.
 - Workaround: Not available; you'll need manual intervention in Azure
 
 ### Scheduled run never fires
 - Check `AZURE_ALERTS_ENABLED: 'true'` is set
-- Check `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'` is set; `AZURE_ALERTS_PUBLISH_ENABLED` alone is insufficient
+- Check both `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'` and `AZURE_ALERTS_PUBLISH_ENABLED: 'true'` are set
 - Check Azure environment (azure-alerts) is configured with valid OIDC credentials
 - Check cron schedule (currently `17 */2 * * *` = every 2 hours UTC)
 
