@@ -456,8 +456,8 @@ def main():
                 "A local fixture can never be used to publish an issue.")
         
         fingerprint_target = args.fingerprint or os.environ.get("ALERT_FINGERPRINT_TARGET", "")
-        if fingerprint_target:
-            fingerprint_target = validate_fingerprint_target(fingerprint_target)
+        # Convert empty string to None for fingerprint filtering
+        fingerprint_target = validate_fingerprint_target(fingerprint_target) if fingerprint_target else None
         
         if args.fixture:
             payload = json.loads(args.fixture.read_text(encoding="utf-8"))
