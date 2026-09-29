@@ -50,6 +50,7 @@ jobs:
         if: always()
         env:
           STRYKER_LOG: ${{ runner.temp }}/stryker.log
+          MUTATION_SCORE_FILE: ${{ runner.temp }}/mutation-score.json
         run: |
           {
             echo "## Mutation testing (advisory)"
@@ -68,6 +69,27 @@ jobs:
             echo
             echo "A low score is informational and does not fail this job or change required checks."
           } >> "$GITHUB_STEP_SUMMARY"
+          score=""
+          if [ -f "$STRYKER_LOG" ]; then
+            score=$(sed -nE 's/.*The final mutation score is ([0-9]+([.][0-9]+)?) %.*/\1/p' "$STRYKER_LOG" | tail -n 1)
+          fi
+          SCORE_VALUE="$score" python3 - <<'PY'
+          import json
+          import os
+
+          score_text = os.environ["SCORE_VALUE"]
+          document = {
+              "schema_version": 1,
+              "available": bool(score_text),
+              "score_percent": float(score_text) if score_text else None,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "head_sha": os.environ["GITHUB_SHA"],
+          }
+          with open(os.environ["MUTATION_SCORE_FILE"], "w", encoding="utf-8") as output:
+              json.dump(document, output, sort_keys=True)
+              output.write("\n")
+          PY
 
       - name: Upload mutation report
         if: always()
@@ -78,4 +100,13 @@ jobs:
             tests/TaskManagement.Api.Tests/StrykerOutput/
             ${{ runner.temp }}/stryker.log
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload machine-readable mutation score
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-score-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mutation-score.json
+          if-no-files-found: error
           retention-days: 14

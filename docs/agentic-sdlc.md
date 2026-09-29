@@ -843,7 +843,10 @@ dotnet stryker
 ```
 
 The workflow writes the mutation score to the job summary and uploads Stryker's
-HTML report and run log for 14 days. This is an **advisory report**: mutation
+HTML report and run log for 14 days. It also publishes a small, run/attempt-scoped
+JSON score artifact with the commit SHA; the SDLC metrics collector reads only
+that normalized contract from successful manual runs on the default branch.
+This is an **advisory report**: mutation
 scores do not fail the job, set a required check, or change branch protection.
 Build, restore, and test-runner errors remain visible as workflow failures.
 Review surviving mutants for meaningful behavior gaps; do not add assertions
@@ -923,6 +926,10 @@ version, observed hours, sample counts, and explicit source availability.
 The repository was created on September 23, 2026. The initial
 [baseline report](metrics/baseline.md) and [structured snapshot](metrics/baseline.json)
 therefore cover only the available early history, not a pre-agentic control period.
+Human-review latency/comment metrics and machine-readable mutation scores were
+added after that snapshot; the historical baseline does not contain the raw
+evidence needed to backfill them. They are unavailable for that baseline, not
+zero. Mutation score is a latest-run signal rather than a weekly cohort.
 The separate initial-baseline section includes activity up to collection start,
 including the current partial day. Weekly comparisons still exclude that day.
 Periods preceding repository creation are displayed as unavailable comparisons,
@@ -936,6 +943,9 @@ are `N/A`, never a fabricated zero-hour duration or 100% reliability.
 | --- | --- | --- |
 | PR cycle time | Main-target PRs merged within the window; median elapsed hours from PR creation to merge, with sample count. | Includes draft/review waiting. Excludes unmerged PRs, other target branches, and negative durations. Author cohorts show Dependabot, explicitly named Copilot agent accounts, and other/unknown; the latter does not mean human-only. |
 | Rework | Per main PR merged within the window: median submitted non-comment reviews (review-round proxy), changes-requested reviews, and commits after the first review's commit SHA; also count titles starting with `Revert`. Each median includes its PR sample count. | Commits-after-review uses PR commit ordering relative to the first reviewed SHA, not a timestamped push event. Missing reviewed-SHA/commit evidence is unavailable, not zero. |
+| Time to first human review | Main-target PRs merged in each complete seven-day window; median elapsed hours from PR creation to the earliest submitted pre-merge review by an account whose GitHub API type is `User` and is not the PR author. Report the number of valid review samples and the number of merged PRs with/without an observed human review. | Bot and unknown account types, the PR author's own reviews, pending reviews, post-merge reviews, and negative durations are excluded. PRs with no human review remain in the cohort but do not receive an imputed zero latency. Open PRs are excluded, so this is not a censored measure of time to review for all opened PRs. |
+| Human inline review comments | Main-target PRs merged in each complete seven-day window; median human inline review comments per merged PR and total comments. Comments are from the PR review-comments endpoint and have an author whose API type is `User` and is not the PR author; only comments created between PR creation and merge count. | Bot/unknown authors, the PR author's own comments, comments after merge, and general PR conversation comments are excluded. Zero comments are a measured zero only when the review/comment source was collected successfully. Comment text and reviewer identities are not added for this metric. At most 1,000 comments are paginated per PR; exceeding the cap makes the aggregate unavailable rather than partial. |
+| Mutation score | The score in the latest successful `workflow_dispatch` run of `mutation-testing.yml` on the repository default branch, provided the run started within the last 14 days and its run/attempt-specific machine-readable artifact is retained and valid. Includes run ID, attempt, start time, commit, and the existing `TaskService.cs` / `TaskServiceTests` scope. | This is a latest-run signal, not a weekly-window cohort or production-quality measure. No qualifying run, missing/expired artifact, or no score is explicitly unavailable. The existing workflow remains advisory with no threshold; this snapshot has no historical mutation-score baseline. |
 | Escaped-defect candidates | Issues opened in the window labeled `bug`, or labeled `incident`/`sev1`/`sev2`/`sev3`/`sev4`; report bugs and incidents separately and total unique issues. Exclude test/drill issues labeled `test`, `drill`, or `synthetic`, and titles clearly marked as test/drill. Show per-merged-PR counts, unattributed counts, and agent/human/unknown/automation authorship splits. | Explicit same-repository issue-to-PR timeline references take precedence. Otherwise, attribute to the latest preceding main merge within 30 days as a **heuristic**, not proof of causation. Each issue is assigned at most once. Copilot bot authors and non-automation PRs with a `Co-authored-by: Copilot` trailer are agents; named non-bot authors are human; missing authors are unknown; Dependabot, Renovate, GitHub Actions, and other bots are automation. |
 | Agent audit trail | Agent-authored PRs created or merged in the window, including PR number, author, approving reviewers, merger, and matching gh-aw run IDs/URLs; also list gh-aw runs started in the window. | Read-only normalized API metadata only. No PR/issue bodies, prompts, secrets, review text, or tool-call logs. Full prompts/tool calls remain in originating session history; Actions details remain in GitHub Actions logs, subject to their access and retention. |
 | Issue-to-merge lead time | Explicit same-repository GitHub `closingIssuesReferences`; one sample per issue at its earliest linked main merge, assigned to that merge's window; median hours from issue creation. | Body-only references do not assert that a PR closed an issue and are not used to infer a creation timestamp or merge duration. External references and negative durations are excluded; negative durations are counted. |
@@ -964,17 +974,27 @@ approval waiting, are explicitly a separate inventory.
   timestamps, base branch, author, and merger; outer and nested connections are
   paginated. PR bodies are parsed transiently; only normalized issue references
   are retained.
-- [REST pull-request reviews and commits](https://docs.github.com/en/rest/pulls/reviews)
-  for PRs created or merged in the last 14 days, and the issue list/timeline for
+- [REST pull-request reviews, review comments, and commits](https://docs.github.com/en/rest/pulls/reviews)
+  for PRs created or merged within the current and previous complete reporting
+  windows (at most the prior 14 days); inline comments are capped at 10 pages
+  of 100 per PR. It also uses the issue list/timeline for
   recently updated labeled bug/incident issues. Commit messages are read transiently
   only to detect the Copilot trailer; issue bodies are not retained. Evidence stores
-  only commit SHA/date/trailer flag, review state/date/SHA/reviewer, issue
-  number/date/labels/PR references, and calculated PR metadata.
+  only commit SHA/date/trailer flag, review state/date/SHA/reviewer and human/bot
+  classification, inline comment date/human classification, issue number/date/labels/
+  PR references, and calculated PR metadata. Comment text is never retained.
 - [REST workflow runs and attempts](https://docs.github.com/en/rest/actions/workflow-runs)
   resolved by exact workflow file path, and
   [attempt-specific jobs](https://docs.github.com/en/rest/actions/workflow-jobs).
   Delivery jobs are sufficient to measure the actual pipeline operations; automatic
   deployment status/SHA records are deliberately not used as image provenance.
+- The bounded `mutation-testing.yml` lookup inspects at most the latest successful
+  default-branch manual run, then its at-most-100 artifact metadata records, and
+  downloads only its run/attempt-specific `mutation-score.json` archive through
+  `gh api`. The collector bounds the archive and JSON sizes, rejects unexpected
+  or unsafe ZIP entries without extracting them, and checks schema, run
+  ID/attempt, commit SHA, and score range; only normalized score/provenance enters
+  the report. PR-triggered and non-default-branch runs are not eligible.
 - [Code-scanning alerts](https://docs.github.com/en/rest/code-scanning/code-scanning)
   and [Dependabot alerts](https://docs.github.com/en/rest/dependabot/alerts).
 

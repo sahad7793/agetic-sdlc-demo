@@ -4,16 +4,21 @@
 import argparse
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+import io
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import statistics
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import zipfile
+import zlib
 
 if __package__:
     from .issue_references import extract_issue_references
@@ -21,10 +26,15 @@ else:
     from issue_references import extract_issue_references
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 API_ROOT = "https://api.github.com"
 DASHBOARD_MARKER = "<!-- sdlc-metrics-dashboard:v1 -->"
 DEFECT_ATTRIBUTION_DAYS = 30
+PR_ACTIVITY_DAYS = 14
+MAX_REVIEW_COMMENT_PAGES = 10
+MUTATION_SCORE_SCHEMA_VERSION = 1
+MUTATION_SCORE_ARTIFACT_PREFIX = "mutation-score"
+MUTATION_SCORE_MAX_BYTES = 16_384
 # Deliberate allowlist: rollback.yml is recovery, not a regular delivery operation.
 WORKFLOWS = {
     "ci": "ci.yml",
@@ -49,6 +59,10 @@ class ApiError(RuntimeError):
     def __init__(self, status, endpoint):
         self.status = status
         super().__init__(f"GitHub API HTTP {status}: {endpoint}")
+
+
+class PaginationLimitError(ValueError):
+    pass
 
 
 def timestamp(value):
@@ -112,12 +126,13 @@ class GitHub:
                 raise ApiError(429 if rate_limited else error.code, endpoint) from None
         raise RuntimeError("Unreachable retry state")
 
-    def pages(self, endpoint, key=None):
+    def pages(self, endpoint, key=None, max_pages=None):
         separator = "&" if "?" in endpoint else "?"
         next_url = f"{endpoint}{separator}per_page=100"
         visited = set()
         result = []
         total = None
+        page_count = 0
         while next_url:
             require(next_url not in visited, "Repeated pagination URL")
             visited.add(next_url)
@@ -132,8 +147,13 @@ class GitHub:
                 require(isinstance(data, list), f"Expected array: {endpoint}")
                 page = data
             result.extend(page)
+            page_count += 1
             link = re.search(r'<([^>]+)>;\s*rel="next"', headers.get("Link", ""))
             next_url = link.group(1) if link else None
+            if next_url and max_pages is not None and page_count >= max_pages:
+                raise PaginationLimitError(
+                    f"Pagination limit reached for {endpoint} after {max_pages} pages"
+                )
         if total is not None:
             require(len(result) == total, f"Incomplete or changing pagination: {endpoint}")
         return result
@@ -218,24 +238,188 @@ def collect_prs(api, owner, name):
 def collect_recent_pr_activity(api, repository, prs, collected_at):
     root = f"repos/{repository}"
     end = timestamp(collected_at)
-    start = end.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=14)
+    start = (end.replace(hour=0, minute=0, second=0, microsecond=0)
+             - timedelta(days=PR_ACTIVITY_DAYS))
     for pr in prs:
         if not any(within(pr[field], iso(start), collected_at)
                    for field in ("created_at", "merged_at")):
             continue
         reviews = api.pages(f"{root}/pulls/{pr['number']}/reviews")
+        try:
+            review_comments = api.pages(
+                f"{root}/pulls/{pr['number']}/comments",
+                max_pages=MAX_REVIEW_COMMENT_PAGES,
+            )
+        except PaginationLimitError:
+            review_comments = []
+            pr["review_comments_available"] = False
+        else:
+            pr["review_comments_available"] = True
         commits = api.pages(f"{root}/pulls/{pr['number']}/commits")
         pr["reviews"] = [{
             "state": review["state"], "submitted_at": review["submitted_at"],
             "commit_id": review["commit_id"],
             "user": review["user"]["login"] if review.get("user") else None,
+            "is_human": bool(
+                review.get("user")
+                and review["user"].get("type") == "User"
+                and review["user"].get("login")
+                and review["user"]["login"].casefold() != (pr.get("author") or "").casefold()
+            ),
         } for review in reviews if review.get("submitted_at")]
+        pr["review_comments"] = [{
+            "created_at": comment["created_at"],
+            "is_human": bool(
+                comment.get("user")
+                and comment["user"].get("type") == "User"
+                and comment["user"].get("login")
+                and comment["user"]["login"].casefold() != (pr.get("author") or "").casefold()
+            ),
+        } for comment in review_comments if comment.get("created_at")]
         pr["commits"] = [{
             "sha": commit["sha"], "committed_at": commit["commit"]["committer"]["date"],
             "copilot_coauthored": bool(re.search(
                 r"(?im)^Co-authored-by:\s*.*\bCopilot\b", commit["commit"]["message"]
             )),
         } for commit in commits]
+
+
+def unavailable_mutation_score(reason):
+    return {"available": False, "reason": reason}
+
+
+def collect_mutation_score(api, repository, default_branch, collected_at):
+    cutoff = iso(timestamp(collected_at) - timedelta(days=PR_ACTIVITY_DAYS))
+    query = urllib.parse.urlencode({
+        "branch": default_branch,
+        "event": "workflow_dispatch",
+        "status": "success",
+        "created": f">={cutoff}",
+        "per_page": 1,
+    })
+    runs_response, _ = api.request(
+        f"repos/{repository}/actions/workflows/mutation-testing.yml/runs?{query}"
+    )
+    require(isinstance(runs_response, dict)
+            and isinstance(runs_response.get("workflow_runs"), list)
+            and isinstance(runs_response.get("total_count"), int),
+            "Malformed mutation workflow run response")
+    runs = runs_response["workflow_runs"]
+    require(len(runs) <= 1 and runs_response["total_count"] >= len(runs),
+            "Malformed bounded mutation workflow run response")
+    require(not runs_response["total_count"] or runs,
+            "Mutation workflow run page is unexpectedly empty")
+    if not runs:
+        return unavailable_mutation_score(
+            f"No successful default-branch mutation run observed in the last {PR_ACTIVITY_DAYS} days"
+        )
+
+    run = runs[0]
+    require(isinstance(run.get("id"), int) and run["id"] > 0
+            and isinstance(run.get("run_attempt"), int) and run["run_attempt"] > 0
+            and run.get("head_branch") == default_branch
+            and run.get("event") == "workflow_dispatch"
+            and run.get("conclusion") == "success"
+            and run.get("status") == "completed"
+            and isinstance(run.get("head_sha"), str)
+            and re.fullmatch(r"[0-9a-fA-F]{40}", run["head_sha"]),
+            "Mutation workflow run did not match the requested successful default-branch cohort")
+    run_started_at = timestamp(run.get("run_started_at"))
+    require(timestamp(cutoff) <= run_started_at <= timestamp(collected_at),
+            "Mutation workflow run is outside its retention window")
+
+    artifacts_response, _ = api.request(
+        f"repos/{repository}/actions/runs/{run['id']}/artifacts?per_page=100"
+    )
+    require(isinstance(artifacts_response, dict)
+            and isinstance(artifacts_response.get("artifacts"), list)
+            and isinstance(artifacts_response.get("total_count"), int),
+            "Malformed mutation artifact response")
+    artifacts = artifacts_response["artifacts"]
+    if artifacts_response["total_count"] > 100:
+        return unavailable_mutation_score(
+            "Mutation artifact listing exceeded the 100-artifact inspection limit"
+        )
+    require(artifacts_response["total_count"] == len(artifacts),
+            "Incomplete mutation artifact listing")
+    artifact_name = f"{MUTATION_SCORE_ARTIFACT_PREFIX}-{run['id']}-{run['run_attempt']}"
+    artifact = next((item for item in artifacts
+                     if item.get("name") == artifact_name and item.get("expired") is False), None)
+    if not artifact:
+        return unavailable_mutation_score(
+            "The latest successful default-branch mutation run has no retained score artifact"
+        )
+    if not isinstance(artifact.get("size_in_bytes"), int) or isinstance(
+        artifact["size_in_bytes"], bool
+    ) or not (
+        0 < artifact["size_in_bytes"] <= MUTATION_SCORE_MAX_BYTES
+    ):
+        return unavailable_mutation_score(
+            "The mutation score artifact size is missing or exceeds the inspection limit"
+        )
+    require(isinstance(artifact.get("id"), int) and artifact["id"] > 0,
+            "Mutation score artifact has no valid identifier")
+
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return unavailable_mutation_score(
+            "The retained mutation score artifact could not be downloaded"
+        )
+    if result.returncode:
+        return unavailable_mutation_score(
+            "The retained mutation score artifact could not be downloaded"
+        )
+    require(0 < len(result.stdout) <= MUTATION_SCORE_MAX_BYTES,
+            "Mutation score artifact archive is empty or exceeds the inspection limit")
+    try:
+        with zipfile.ZipFile(io.BytesIO(result.stdout)) as archive:
+            entries = archive.infolist()
+            require(
+                len(entries) == 1
+                and entries[0].filename == "mutation-score.json"
+                and not entries[0].is_dir()
+                and ((entries[0].external_attr >> 16) & 0o170000) != stat.S_IFLNK
+                and not entries[0].flag_bits & 0x1
+                and entries[0].file_size <= MUTATION_SCORE_MAX_BYTES
+                and entries[0].compress_size <= MUTATION_SCORE_MAX_BYTES,
+                "Mutation score artifact archive does not match its bounded file contract",
+            )
+            score_bytes = archive.read(entries[0])
+    except (OSError, zipfile.BadZipFile, RuntimeError, zlib.error) as error:
+        raise ValueError("Mutation score artifact archive is invalid") from error
+    require(len(score_bytes) <= MUTATION_SCORE_MAX_BYTES,
+            "Mutation score artifact contract file exceeds the inspection limit")
+    score_data = json.loads(score_bytes.decode("utf-8"))
+
+    require(isinstance(score_data, dict)
+            and score_data.get("schema_version") == MUTATION_SCORE_SCHEMA_VERSION
+            and score_data.get("run_id") == run["id"]
+            and score_data.get("run_attempt") == run["run_attempt"]
+            and score_data.get("head_sha") == run.get("head_sha")
+            and isinstance(score_data.get("available"), bool),
+            "Mutation score artifact provenance does not match its workflow run")
+    if score_data.get("available") is not True:
+        require(score_data.get("score_percent") is None,
+                "Unavailable mutation score artifact contains a score")
+        return unavailable_mutation_score(
+            "Stryker did not emit a score for the latest successful default-branch run"
+        )
+    score = score_data.get("score_percent")
+    require(isinstance(score, (int, float)) and not isinstance(score, bool)
+            and 0 <= score <= 100,
+            "Mutation score artifact contains an invalid percentage")
+    return {
+        "available": True, "reason": None, "score_percent": round(score, 2),
+        "run_id": run["id"], "run_attempt": run["run_attempt"],
+        "run_started_at": iso(run_started_at),
+        "head_sha": run["head_sha"],
+        "run_url": f"https://github.com/{repository}/actions/runs/{run['id']}",
+        "scope": "TaskService.cs, exercised by TaskServiceTests",
+    }
 
 
 def collect_defect_issues(api, repository, collected_at):
@@ -290,7 +474,7 @@ def collect(api, repository, collected_at, collector_commit):
     metadata, _ = api.request(root)
     activity_start = iso(
         timestamp(collected_at).replace(hour=0, minute=0, second=0, microsecond=0)
-        - timedelta(days=14)
+        - timedelta(days=PR_ACTIVITY_DAYS)
     )
     evidence = {
         "schema_version": SCHEMA_VERSION, "repository": repository,
@@ -300,6 +484,9 @@ def collect(api, repository, collected_at, collector_commit):
         "prs": collect_prs(api, owner, name), "issues": [], "attempts": [],
         "deployment_jobs": [], "alerts": {},
     }
+    evidence["mutation_score"] = collect_mutation_score(
+        api, repository, metadata["default_branch"], collected_at
+    )
     collect_recent_pr_activity(api, repository, evidence["prs"], collected_at)
     evidence["issues"] = collect_defect_issues(api, repository, collected_at)
     for kind, path in WORKFLOWS.items():
@@ -476,6 +663,72 @@ def rework_metrics(prs):
         "commits_after_first_review_unavailable": sum(item["commits_after_first_review"] is None
                                                        for item in per_pr),
         "pr_title_starts_with_revert": sum(pr["is_revert"] for pr in prs),
+        "per_merged_pr": per_pr,
+    }
+
+
+def human_review_metrics(prs):
+    first_review_hours = []
+    comments_per_pr = []
+    reviewed_prs = 0
+    negative_durations = 0
+    per_pr = []
+    comments_available = all(pr.get("review_comments_available", False) for pr in prs)
+    for pr in prs:
+        created_at = timestamp(pr["created_at"])
+        merged_at = timestamp(pr["merged_at"])
+        reviews = [
+            review for review in pr.get("reviews", [])
+            if review.get("is_human") and review.get("submitted_at")
+            and timestamp(review["submitted_at"]) <= merged_at
+        ]
+        valid_reviews = []
+        for review in reviews:
+            elapsed = hours(pr["created_at"], review["submitted_at"])
+            if elapsed < 0:
+                negative_durations += 1
+            else:
+                valid_reviews.append(review)
+        has_human_review = bool(reviews)
+        if has_human_review:
+            reviewed_prs += 1
+        first_hours = None
+        if valid_reviews:
+            first = min(valid_reviews, key=lambda review: timestamp(review["submitted_at"]))
+            first_hours = hours(pr["created_at"], first["submitted_at"])
+            first_review_hours.append(first_hours)
+
+        comments = None
+        if pr.get("review_comments_available", False):
+            comments = sum(
+                bool(comment.get("is_human"))
+                and created_at <= timestamp(comment["created_at"]) <= merged_at
+                for comment in pr.get("review_comments", [])
+            )
+            comments_per_pr.append(comments)
+        per_pr.append({
+            "number": pr["number"], "author": pr["author"], "authorship": authorship(pr),
+            "has_human_review": has_human_review,
+            "first_human_review_hours": first_hours,
+            "human_inline_review_comments": comments,
+        })
+    return {
+        "merged_prs": len(prs),
+        "human_reviewed_prs": reviewed_prs,
+        "no_human_review_prs": len(prs) - reviewed_prs,
+        "first_human_review_hours": durations(first_review_hours),
+        "review_comments_available": comments_available,
+        "review_comments_reason": (
+            None if comments_available
+            else f"Review-comment pagination exceeded {MAX_REVIEW_COMMENT_PAGES * 100} items for a PR"
+        ),
+        "human_inline_review_comments_per_pr": (
+            medians(comments_per_pr) if comments_available else None
+        ),
+        "human_inline_review_comments_total": (
+            sum(comments_per_pr) if comments_available else None
+        ),
+        "excluded_negative_first_review_durations": negative_durations,
         "per_merged_pr": per_pr,
     }
 
@@ -673,6 +926,11 @@ def period(evidence, start, end, baseline=False):
             for group in ("agent", "human", "unknown", "automation")
         } if timestamp(start) >= timestamp(evidence.get("pr_activity_available_from", start))
             else None),
+        "review_effort": (
+            {"available": False, "reason": "PR review/comment evidence is retained for the last 14 days"}
+            if timestamp(start) < timestamp(evidence.get("pr_activity_available_from", start))
+            else {"available": True, **human_review_metrics(selected)}
+        ),
         "escaped_defects": escaped_defect_metrics(evidence, selected, merged, start, end),
         "issue_lead_time": durations(lead_times),
         "linked_merged_prs": len(linked_prs), "link_coverage_denominator": len(selected),
@@ -744,6 +1002,10 @@ def build_report(evidence, baseline=False):
             "prs": len(evidence["prs"]), "workflow_attempts": len(evidence["attempts"]),
             "deployment_jobs": len(evidence["deployment_jobs"]), "issues": len(evidence["issues"]),
         },
+        "mutation_score": evidence.get(
+            "mutation_score",
+            unavailable_mutation_score("Mutation score evidence was not collected"),
+        ),
     }
     if baseline:
         report["initial_baseline"] = period(
@@ -824,6 +1086,39 @@ def render(report):
             median_cell(p["rework"][field]) if p["rework"]["available"]
             else display(p["rework"]["reason"])
         ))
+    row("Median time from PR creation to first human review", lambda p: (
+        duration_cell(p["review_effort"]["first_human_review_hours"])
+        if p["review_effort"]["available"] else display(p["review_effort"]["reason"])
+    ))
+    row("Merged PRs with a submitted human review", lambda p: (
+        f"{p['review_effort']['human_reviewed_prs']}/{p['review_effort']['merged_prs']}"
+        if p["review_effort"]["available"] else display(p["review_effort"]["reason"])
+    ))
+    row("Merged PRs with no submitted human review", lambda p: (
+        str(p["review_effort"]["no_human_review_prs"])
+        if p["review_effort"]["available"] else display(p["review_effort"]["reason"])
+    ))
+    row("Median human inline review comments per merged PR", lambda p: (
+        median_cell(p["review_effort"]["human_inline_review_comments_per_pr"])
+        if p["review_effort"]["available"]
+        and p["review_effort"]["review_comments_available"]
+        else display(
+            p["review_effort"]["review_comments_reason"]
+            if p["review_effort"]["available"] else p["review_effort"]["reason"]
+        )
+    ))
+    row("Human inline review comments total", lambda p: (
+        str(p["review_effort"]["human_inline_review_comments_total"])
+        if p["review_effort"]["available"] and p["review_effort"]["review_comments_available"]
+        else display(
+            p["review_effort"]["review_comments_reason"]
+            if p["review_effort"]["available"] else p["review_effort"]["reason"]
+        )
+    ))
+    row("Excluded negative first-review durations", lambda p: (
+        str(p["review_effort"]["excluded_negative_first_review_durations"])
+        if p["review_effort"]["available"] else display(p["review_effort"]["reason"])
+    ))
     row("Merged PRs titled Revert", lambda p: (
         str(p["rework"]["pr_title_starts_with_revert"]) if p["rework"]["available"]
         else display(p["rework"]["reason"])
@@ -923,15 +1218,27 @@ def render(report):
         ))
     lines.extend(["", "### Rework by merged PR", ""])
     if current["rework"]["available"]:
+        review_effort = current["review_effort"]
+        review_by_pr = {
+            item["number"]: item for item in review_effort["per_merged_pr"]
+        } if review_effort["available"] else {}
         lines.extend([
-            "| PR | Author | Split | Review rounds | Changes requested | Commits after first reviewed commit | Revert |",
-            "| --- | --- | --- | ---: | ---: | ---: | --- |",
+            "| PR | Author | Split | Review rounds | Changes requested | Commits after first reviewed commit | First human review (h) | Human inline comments | Revert |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ])
         for item in current["rework"]["per_merged_pr"]:
+            review = review_by_pr.get(item["number"])
+            first_review = (
+                display(review["first_human_review_hours"])
+                if review and review["has_human_review"]
+                else "none observed" if review else "N/A"
+            )
+            inline_comments = display(review["human_inline_review_comments"]) if review else "N/A"
             lines.append(
                 f"| #{item['number']} | {display(item['author'])} | {item['authorship']} | "
                 f"{item['review_rounds']} | {item['changes_requested_reviews']} | "
-                f"{display(item['commits_after_first_review'])} | "
+                f"{display(item['commits_after_first_review'])} | {first_review} | "
+                f"{inline_comments} | "
                 f"{'yes' if item['is_revert'] else 'no'} |"
             )
         lines.append(
@@ -940,6 +1247,24 @@ def render(report):
         )
     else:
         lines.append(display(current["rework"]["reason"]))
+
+    mutation_score = report["mutation_score"]
+    lines.extend(["", "### Mutation-testing signal", ""])
+    if mutation_score["available"]:
+        lines.append(
+            f"Latest successful default-branch Stryker score: **{mutation_score['score_percent']}%** "
+            f"([run #{mutation_score['run_id']}]({display(mutation_score['run_url'])}), "
+            f"attempt {mutation_score['run_attempt']}, started {display(mutation_score['run_started_at'])}, "
+            f"commit `{display(mutation_score['head_sha'][:12])}`)."
+        )
+        lines.append(f"Scope: {display(mutation_score['scope'])}.")
+    else:
+        lines.append(f"Mutation score: **Unavailable** — {display(mutation_score['reason'])}.")
+    lines.append(
+        "This is the latest successful default-branch manual run with a retained score artifact "
+        "(14-day retention), not a weekly-window metric. It is advisory and has no pass/fail threshold; "
+        "no historical mutation-score baseline is available."
+    )
 
     lines.extend(["", "### Escaped-defect candidates by merged PR", ""])
     if current["escaped_defects"]["available"]:
@@ -1018,6 +1343,13 @@ def render(report):
         "Review rounds count submitted "
         "non-comment reviews; commits after the first review count commits after the SHA it reviewed, a proxy "
         "for post-review rework. Reverted PRs have titles starting with `Revert`.",
+        "- First-human-review latency uses the earliest submitted review by a GitHub `User` account other "
+        "than the PR author, between PR creation and merge; bot and unknown account types, pending reviews, post-merge reviews, and "
+        "negative durations are excluded. PRs without a human review remain in the merged-PR denominator "
+        "and are reported separately; latency is not imputed as zero. Inline review-comment counts include "
+        "only comments by `User` accounts other than the PR author, created between PR creation and merge; "
+        "general PR conversation comments and comment text are not collected. At most 1,000 inline comments "
+        "are read per PR; if that cap is exceeded, inline-comment totals and medians are unavailable, not partial.",
         "- Agent audit data lists PR number, author, approving reviewers, merger, and matching gh-aw run IDs/URLs; "
         "it also lists gh-aw workflow runs in the window. It contains no prompts, secrets, or tool-call logs.",
         "- CI includes build, tests and CodeQL together; execution success is not a defect or vulnerability count. "
@@ -1025,8 +1357,10 @@ def render(report):
         "- GitHub APIs are not transactional; observations span the collection interval. "
         "Deleted/expired runs and missing historical state cannot be recovered. "
         "Alert event timestamps show available latest transitions, not a complete event log.",
-        "- Review/commit and labeled-issue evidence is retained for the last 14 days. Older "
-        "baseline periods show these metrics as unavailable rather than zero.",
+        "- Review/commit and labeled-issue evidence covers the current and immediately previous complete "
+        "seven-day windows (up to 14 days before the current window ends). Older baseline periods show "
+        "these metrics as unavailable rather than zero. Mutation score is sourced from the latest "
+        "successful default-branch manual run within its artifact retention window.",
         "", "### Current inventory (not historical period-end state)", "",
         f"- Open Dependabot PRs: {report['inventory_at_collection']['dependabot_open_prs']}.",
     ])

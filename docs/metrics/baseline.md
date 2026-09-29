@@ -11,6 +11,10 @@ Previous: **[2026-09-11T00:00:00Z, 2026-09-18T00:00:00Z)**.
 Repository created: 2026-09-23T13:52:31Z. Observed hours: current 34.125, previous 0.
 A period predating repository creation is partial/unavailable as a comparison, not a zero-activity baseline.
 
+The baseline predates collection of human-review latency/inline-comment metrics and
+the machine-readable mutation-score artifact. Those metrics are unavailable for
+this historical snapshot; no review-effort or mutation-score values are inferred.
+
 | Metric | Current | Previous |
 | --- | --- | --- |
 | Main PRs merged | 19 | N/A (repository did not exist) |

@@ -93,7 +93,8 @@ For design changes, use the [ADR guide](docs/adr/README.md) and
 [human design review checklist](docs/design-review.md) in the pull request.
 
 Review the [SDLC metrics dashboard](https://github.com/sahad7793/agetic-sdlc-demo/issues/28)
-for delivery speed, CI/deployment reliability, and agentic execution outcomes.
+for delivery speed, human review effort, the advisory Stryker mutation score,
+CI/deployment reliability, and agentic execution outcomes.
 See the [metric definitions and limitations](docs/agentic-sdlc.md#sdlc-metrics-dashboard)
 before comparing periods.
 

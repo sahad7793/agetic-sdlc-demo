@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import unittest
 import urllib.error
+import zipfile
 from unittest.mock import patch
 
 
@@ -18,7 +19,7 @@ END = "2026-09-25T00:00:00Z"
 
 def evidence():
     return {
-        "schema_version": 2, "repository": REPOSITORY,
+        "schema_version": 3, "repository": REPOSITORY,
         "repository_created_at": "2026-09-23T12:00:00Z",
         "collected_at": "2026-09-25T12:00:00Z",
         "collection_finished_at": "2026-09-25T12:01:00Z",
@@ -38,7 +39,8 @@ def pr(number=1, **kwargs):
         "merged_at": "2026-09-24T12:00:00Z",
         "state": "MERGED", "base": "main", "author": "maintainer", "author_is_bot": False,
         "title": "Add feature", "is_revert": False, "merged_by": "maintainer",
-        "issues": [], "reviews": [], "commits": [], **kwargs,
+        "issues": [], "reviews": [], "review_comments": [],
+        "review_comments_available": True, "commits": [], **kwargs,
     }
 
 
@@ -114,6 +116,42 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(rework["pr_title_starts_with_revert"], 1)
         self.assertEqual(result["rework_by_authorship"]["human"]["merged_prs"], 0)
 
+    def test_human_review_latency_and_inline_comments_exclude_bots_and_post_merge_activity(self):
+        reviewed = pr(
+            1,
+            reviews=[
+                {"state": "APPROVED", "submitted_at": "2026-09-23T12:30:00Z",
+                 "is_human": False, "commit_id": "bot", "user": "review-bot"},
+                {"state": "COMMENTED", "submitted_at": "2026-09-23T14:00:00Z",
+                 "is_human": True, "commit_id": "human", "user": "reviewer"},
+                {"state": "APPROVED", "submitted_at": "2026-09-24T13:00:00Z",
+                 "is_human": True, "commit_id": "after-merge", "user": "reviewer"},
+            ],
+            review_comments=[
+                {"created_at": "2026-09-23T15:00:00Z", "is_human": True},
+                {"created_at": "2026-09-23T16:00:00Z", "is_human": False},
+                {"created_at": "2026-09-24T13:00:00Z", "is_human": True},
+            ],
+        )
+        bot_only = pr(
+            2,
+            reviews=[{
+                "state": "APPROVED", "submitted_at": "2026-09-23T13:00:00Z",
+                "is_human": False, "commit_id": "bot", "user": "review-bot",
+            }],
+            review_comments=[{"created_at": "2026-09-23T14:00:00Z", "is_human": False}],
+        )
+
+        result = metrics.period({**evidence(), "prs": [reviewed, bot_only]}, START, END)
+        effort = result["review_effort"]
+        self.assertEqual(effort["first_human_review_hours"], {"samples": 1, "median_hours": 2})
+        self.assertEqual(effort["human_reviewed_prs"], 1)
+        self.assertEqual(effort["no_human_review_prs"], 1)
+        self.assertEqual(effort["human_inline_review_comments_per_pr"],
+                         {"samples": 2, "median": 0.5})
+        self.assertEqual(effort["human_inline_review_comments_total"], 1)
+        self.assertEqual(effort["per_merged_pr"][1]["first_human_review_hours"], None)
+
     def test_authorship_separates_copilot_humans_unknowns_and_automation(self):
         data = evidence()
         data["prs"] = [
@@ -173,6 +211,7 @@ class MetricTests(unittest.TestCase):
         self.assertFalse(result["escaped_defects"]["available"])
         self.assertIsNone(result["rework_by_authorship"])
         self.assertFalse(result["rework"]["available"])
+        self.assertFalse(result["review_effort"]["available"])
 
     def test_synthetic_incidents_are_excluded_from_open_and_attributed_defects(self):
         data = evidence()
@@ -317,13 +356,15 @@ class MetricTests(unittest.TestCase):
 
     def test_dependabot_403_is_unavailable_not_zero(self):
         api = FakeApi([
-            ({"created_at": START}, {}),
+            ({"created_at": START, "default_branch": "main"}, {}),
             ([], {}),
             *[({"workflow_runs": [], "total_count": 0}, {}) for _ in range(4)],
             ([], {}),
             metrics.ApiError(403, "dependabot/alerts"),
         ])
-        with patch.object(metrics, "collect_prs", return_value=[]):
+        with (patch.object(metrics, "collect_prs", return_value=[]),
+              patch.object(metrics, "collect_mutation_score",
+                           return_value=metrics.unavailable_mutation_score("fixture"))):
             result = metrics.collect(api, REPOSITORY, END, "abc")
 
         dependabot = result["alerts"]["dependabot"]
@@ -346,6 +387,8 @@ class MetricTests(unittest.TestCase):
         self.assertIn("Agent audit trail", output)
         self.assertIn("not causal proof", output)
         self.assertNotIn("N/A%", output)
+        self.assertIn("Mutation score: **Unavailable**", output)
+        self.assertIn("Median time from PR creation to first human review", output)
         self.assertEqual(metrics.display("@owner|<script>\n"), "&#64;owner&#124;&lt;script&gt; ")
 
 
@@ -365,11 +408,19 @@ class FakeApi(metrics.GitHub):
 class ApiTests(unittest.TestCase):
     def test_recent_pr_activity_stores_only_normalized_review_and_commit_evidence(self):
         class ActivityApi:
-            def pages(self, endpoint, key=None):
+            def pages(self, endpoint, key=None, max_pages=None):
                 if endpoint.endswith("/reviews"):
+                    return [
+                        {"state": "APPROVED", "submitted_at": "2026-09-23T23:00:00Z",
+                         "commit_id": "author", "user": {"login": "human", "type": "User"}},
+                        {"state": "APPROVED", "submitted_at": "2026-09-24T00:00:00Z",
+                         "commit_id": "sha1", "user": {"login": "reviewer", "type": "User"}},
+                    ]
+                if endpoint.endswith("/comments"):
                     return [{
-                        "state": "APPROVED", "submitted_at": "2026-09-24T00:00:00Z",
-                        "commit_id": "sha1", "user": {"login": "reviewer"},
+                        "created_at": "2026-09-24T01:00:00Z",
+                        "user": {"login": "bot", "type": "Bot"},
+                        "body": "untrusted comment text",
                     }]
                 return [
                     {"sha": "sha1", "commit": {"committer": {"date": START},
@@ -380,9 +431,93 @@ class ApiTests(unittest.TestCase):
         target = pr(author="human")
         metrics.collect_recent_pr_activity(ActivityApi(), REPOSITORY, [target], END)
         self.assertTrue(target["commits"][0]["copilot_coauthored"])
-        self.assertEqual(target["reviews"][0]["user"], "reviewer")
+        self.assertEqual(target["reviews"][1]["user"], "reviewer")
+        self.assertFalse(target["reviews"][0]["is_human"])
+        self.assertTrue(target["reviews"][1]["is_human"])
+        self.assertEqual(target["review_comments"], [{
+            "created_at": "2026-09-24T01:00:00Z", "is_human": False,
+        }])
         self.assertNotIn("message", target["commits"][0])
+        self.assertNotIn("body", target["review_comments"][0])
         self.assertEqual(metrics.authorship(target), "agent")
+
+    def test_mutation_score_uses_only_latest_successful_main_artifact_with_provenance(self):
+        run = {
+            "id": 123, "run_attempt": 2, "head_branch": "main",
+            "event": "workflow_dispatch", "conclusion": "success", "status": "completed",
+            "created_at": "2026-09-24T12:00:00Z",
+            "run_started_at": "2026-09-24T12:01:00Z", "head_sha": "a" * 40,
+        }
+        api = FakeApi([
+            ({"total_count": 2, "workflow_runs": [run]}, {}),
+            ({"total_count": 1, "artifacts": [{
+                "id": 456, "name": "mutation-score-123-2",
+                "expired": False, "size_in_bytes": 128,
+            }]}, {}),
+        ])
+
+        def download(command, **kwargs):
+            payload = (
+                '{"schema_version":1,"available":true,"score_percent":82.5,'
+                '"run_id":123,"run_attempt":2,"head_sha":"' + ("a" * 40) + '"}'
+            )
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+                output.writestr("mutation-score.json", payload)
+            return metrics.subprocess.CompletedProcess(command, 0, archive.getvalue(), b"")
+
+        with patch.object(metrics.subprocess, "run", side_effect=download) as runner:
+            result = metrics.collect_mutation_score(
+                api, REPOSITORY, "main", "2026-09-25T12:00:00Z"
+            )
+        self.assertTrue(result["available"])
+        self.assertEqual(result["score_percent"], 82.5)
+        self.assertEqual(result["run_id"], 123)
+        self.assertEqual(api.calls[0][0].split("?")[0],
+                         f"repos/{REPOSITORY}/actions/workflows/mutation-testing.yml/runs")
+        self.assertIn("per_page=1", api.calls[0][0])
+        self.assertEqual(runner.call_count, 1)
+        self.assertIn("actions/artifacts/456/zip", runner.call_args.args[0][2])
+
+    def test_render_includes_mutation_score_run_provenance(self):
+        data = evidence()
+        data["mutation_score"] = {
+            "available": True, "reason": None, "score_percent": 82.5,
+            "run_id": 123, "run_attempt": 2,
+            "run_started_at": "2026-09-24T12:01:00Z", "head_sha": "a" * 40,
+            "run_url": f"https://github.com/{REPOSITORY}/actions/runs/123",
+            "scope": "TaskService.cs, exercised by TaskServiceTests",
+        }
+        report = metrics.build_report(data)
+        output = metrics.render(report)
+        self.assertIn("**82.5%**", output)
+        self.assertIn("run #123", output)
+        self.assertIn("attempt 2", output)
+        self.assertIn("commit `aaaaaaaaaaaa`", output)
+
+    def test_mutation_score_missing_and_over_limit_sources_are_unavailable(self):
+        no_runs = FakeApi([({"total_count": 0, "workflow_runs": []}, {})])
+        result = metrics.collect_mutation_score(
+            no_runs, REPOSITORY, "main", "2026-09-25T12:00:00Z"
+        )
+        self.assertFalse(result["available"])
+        self.assertIn("No successful", result["reason"])
+
+        run = {
+            "id": 123, "run_attempt": 1, "head_branch": "main",
+            "event": "workflow_dispatch", "conclusion": "success", "status": "completed",
+            "created_at": "2026-09-24T12:00:00Z",
+            "run_started_at": "2026-09-24T12:01:00Z", "head_sha": "a" * 40,
+        }
+        too_many_artifacts = FakeApi([
+            ({"total_count": 1, "workflow_runs": [run]}, {}),
+            ({"total_count": 101, "artifacts": []}, {}),
+        ])
+        result = metrics.collect_mutation_score(
+            too_many_artifacts, REPOSITORY, "main", "2026-09-25T12:00:00Z"
+        )
+        self.assertFalse(result["available"])
+        self.assertIn("100-artifact", result["reason"])
 
     def test_labeled_defect_collection_keeps_only_normalized_fields_and_pr_references(self):
         api = FakeApi([
@@ -453,6 +588,35 @@ class ApiTests(unittest.TestCase):
         ])
         self.assertEqual(api.pages("jobs", "jobs"), [{"id": 1}, {"id": 2}])
 
+    def test_review_comment_pagination_is_capped_and_reported_unavailable(self):
+        api = FakeApi([
+            ([{"id": number} for number in range(100)],
+             {"Link": '<https://api.github.com/comments?page=2>; rel="next"'}),
+        ])
+        with self.assertRaises(metrics.PaginationLimitError):
+            api.pages("comments", max_pages=1)
+        self.assertEqual(len(api.calls), 1)
+
+        class CappedActivityApi:
+            def pages(self, endpoint, key=None, max_pages=None):
+                if endpoint.endswith("/reviews"):
+                    return [{
+                        "state": "APPROVED", "submitted_at": "2026-09-23T13:00:00Z",
+                        "commit_id": "sha", "user": {"login": "reviewer", "type": "User"},
+                    }]
+                if endpoint.endswith("/comments"):
+                    raise metrics.PaginationLimitError("page cap")
+                return []
+
+        target = pr()
+        metrics.collect_recent_pr_activity(CappedActivityApi(), REPOSITORY, [target], END)
+        result = metrics.period({**evidence(), "prs": [target]}, START, END)
+        effort = result["review_effort"]
+        self.assertTrue(effort["available"])
+        self.assertEqual(effort["first_human_review_hours"]["samples"], 1)
+        self.assertFalse(effort["review_comments_available"])
+        self.assertIsNone(effort["human_inline_review_comments_total"])
+
     def test_incomplete_or_malformed_data_is_not_empty_success(self):
         for response in [({"total_count": 2, "jobs": []}, {}), ({"jobs": None}, {})]:
             with self.subTest(response=response), self.assertRaises(ValueError):
@@ -497,13 +661,15 @@ class ApiTests(unittest.TestCase):
         for status in (403, 404, 429, 500):
             with self.subTest(status=status):
                 api = FakeApi([
-                    ({"created_at": START}, {}),
+                    ({"created_at": START, "default_branch": "main"}, {}),
                     ([], {}),
                     *[({"workflow_runs": [], "total_count": 0}, {}) for _ in range(4)],
                     metrics.ApiError(status, "alerts"),
                     ([], {}),
                 ])
-                with patch.object(metrics, "collect_prs", return_value=[]):
+                with (patch.object(metrics, "collect_prs", return_value=[]),
+                      patch.object(metrics, "collect_mutation_score",
+                                   return_value=metrics.unavailable_mutation_score("fixture"))):
                     if status in (403, 404):
                         result = metrics.collect(api, REPOSITORY, END, "abc")
                         self.assertFalse(result["alerts"]["codeql"]["available"])
@@ -516,7 +682,7 @@ class ApiTests(unittest.TestCase):
         class RunApi:
             def request(self, endpoint):
                 if endpoint == f"repos/{REPOSITORY}":
-                    return {"created_at": START}, {}
+                    return {"created_at": START, "default_branch": "main"}, {}
                 number = int(endpoint.rsplit("/", 1)[-1])
                 return {
                     "event": "workflow_run", "head_branch": "main", "run_started_at": START,
@@ -533,7 +699,9 @@ class ApiTests(unittest.TestCase):
                     }]
                 return []
 
-        with patch.object(metrics, "collect_prs", return_value=[]):
+        with (patch.object(metrics, "collect_prs", return_value=[]),
+              patch.object(metrics, "collect_mutation_score",
+                           return_value=metrics.unavailable_mutation_score("fixture"))):
             result = metrics.collect(RunApi(), REPOSITORY, END, "abc")
         self.assertEqual([a["conclusion"] for a in result["attempts"]], ["failure", "success"])
         self.assertEqual(len(result["deployment_jobs"]), 1)
@@ -542,7 +710,7 @@ class ApiTests(unittest.TestCase):
         class RunApi:
             def request(self, endpoint):
                 if endpoint == f"repos/{REPOSITORY}":
-                    return {"created_at": START}, {}
+                    return {"created_at": START, "default_branch": "main"}, {}
                 return {"event": "workflow_run", "head_branch": "main", "run_started_at": START,
                         "status": "completed", "conclusion": "success"}, {}
 
@@ -553,7 +721,9 @@ class ApiTests(unittest.TestCase):
                     return [{"name": "New unmapped deployment"}]
                 return []
 
-        with patch.object(metrics, "collect_prs", return_value=[]):
+        with (patch.object(metrics, "collect_prs", return_value=[]),
+              patch.object(metrics, "collect_mutation_score",
+                           return_value=metrics.unavailable_mutation_score("fixture"))):
             with self.assertRaisesRegex(ValueError, "Unmapped"):
                 metrics.collect(RunApi(), REPOSITORY, END, "abc")
 
@@ -562,7 +732,7 @@ class ApiTests(unittest.TestCase):
 
         class RunApi:
             def request(self, endpoint):
-                return {"created_at": START}, {}
+                return {"created_at": START, "default_branch": "main"}, {}
 
             def pages(self, endpoint, key=None):
                 endpoints.append(endpoint)
@@ -570,7 +740,9 @@ class ApiTests(unittest.TestCase):
                     return [{"id": 999, "run_attempt": 1}]
                 return []
 
-        with patch.object(metrics, "collect_prs", return_value=[]):
+        with (patch.object(metrics, "collect_prs", return_value=[]),
+              patch.object(metrics, "collect_mutation_score",
+                           return_value=metrics.unavailable_mutation_score("fixture"))):
             result = metrics.collect(RunApi(), REPOSITORY, END, "abc")
         self.assertTrue(any(endpoint.endswith("deploy.yml/runs") for endpoint in endpoints))
         self.assertFalse(any("rollback.yml" in endpoint for endpoint in endpoints))
@@ -654,6 +826,32 @@ class PublicationTests(unittest.TestCase):
         api.comments.append(copy.deepcopy(api.comments[0]))
         with self.assertRaises(ValueError):
             metrics.publish(api, REPOSITORY, 28, report)
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def test_mutation_score_artifact_is_read_only_run_scoped_and_retained_14_days(self):
+        workflow = (ROOT / ".github" / "workflows" / "mutation-testing.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(workflow, r"(?m)^permissions:\n  contents: read$")
+        self.assertIn(
+            "name: mutation-score-${{ github.run_id }}-${{ github.run_attempt }}",
+            workflow,
+        )
+        self.assertIn("path: ${{ runner.temp }}/mutation-score.json", workflow)
+        self.assertIn("retention-days: 14", workflow)
+        self.assertIn('"head_sha": os.environ["GITHUB_SHA"]', workflow)
+        self.assertNotRegex(workflow, r"(?m)^  (?:actions|contents|issues): write$")
+
+    def test_dashboard_collector_reads_artifacts_but_writes_only_through_existing_publisher(self):
+        workflow = (ROOT / ".github" / "workflows" / "sdlc-metrics.yml").read_text(
+            encoding="utf-8"
+        )
+        collect = workflow.split("  publish:", 1)[0]
+        publish = workflow.split("  publish:", 1)[1]
+        self.assertIn("      actions: read", collect)
+        self.assertNotIn("issues: write", collect)
+        self.assertIn("      issues: write", publish)
 
 
 if __name__ == "__main__":
