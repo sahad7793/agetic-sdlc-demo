@@ -611,6 +611,35 @@ runs against a deployed staging or production environment automatically.
   It exists as an opt-in, double-confirmed, read-only capability for a human
   to use deliberately; nothing in this repository schedules or triggers it.
 
+## Mutation testing
+
+`.github/workflows/mutation-testing.yml` runs a bounded Stryker.NET pilot for
+the `TaskService` business rules. Pull requests run it only when the service,
+its focused tests, project/tool configuration, SDK pin, or workflow changes;
+maintainers can also dispatch it manually. The job has a 15-minute timeout,
+uses at most two mutation workers, and filters test execution to
+`TaskServiceTests`. The committed `stryker-config.json` restricts mutation to
+`TaskService.cs`; controller, repository, migration, and infrastructure code
+are outside this pilot.
+
+The local `dotnet-stryker` tool is pinned in `.config/dotnet-tools.json` at
+version 4.16.0, which runs on the repository's .NET 8 runtime. The API and test
+project remain on `net8.0`; this pilot does not change `global.json` or add a
+runtime package dependency. Run it locally with:
+
+```bash
+dotnet tool restore
+cd tests/TaskManagement.Api.Tests
+dotnet stryker
+```
+
+The workflow writes the mutation score to the job summary and uploads Stryker's
+HTML report and run log for 14 days. This is an **advisory report**: mutation
+scores do not fail the job, set a required check, or change branch protection.
+Build, restore, and test-runner errors remain visible as workflow failures.
+Review surviving mutants for meaningful behavior gaps; do not add assertions
+solely to kill logging or other non-business mutations.
+
 ## Observability
 
 Application Insights and Log Analytics were provisioned per environment from the start, but until this change nothing consumed the telemetry proactively — no alerts, no action groups, no dashboard. This section closes that gap with additive Bicep resources; no application code, deployment workflow logic, or existing SQL/identity setup was changed except one required wiring fix (below).

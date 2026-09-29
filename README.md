@@ -44,6 +44,27 @@ reports (advisory-only) against an explicit, human-reviewed baseline via
 `scripts/perf_gate.py`. See [docs/agentic-sdlc.md#performance-and-load-testing-gate](docs/agentic-sdlc.md#performance-and-load-testing-gate)
 for the design, baseline lifecycle, and the manual, opt-in staging smoke mode.
 
+## Mutation testing pilot
+
+The path-scoped [Mutation testing workflow](.github/workflows/mutation-testing.yml)
+runs Stryker.NET against `TaskService.cs` and the focused `TaskServiceTests`.
+It is advisory: the mutation score is reported in the job summary and the HTML
+report is uploaded as a 14-day artifact; no score threshold or required check is
+enforced. The job has a 15-minute timeout.
+
+Run the same pilot locally with the pinned tool:
+
+```bash
+dotnet tool restore
+cd tests/TaskManagement.Api.Tests
+dotnet stryker
+```
+
+The tool manifest pins Stryker.NET 4.16.0 for the repository's .NET 8 runtime.
+Keep the app and test projects on `net8.0`; coordinate any tool upgrade with its
+runtime requirements. See [Mutation testing](docs/agentic-sdlc.md#mutation-testing)
+for scope and CI policy.
+
 ## Architecture
 
 - **Controllers** expose HTTP endpoints and map service results to HTTP responses.

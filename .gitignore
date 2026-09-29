@@ -19,6 +19,8 @@ TestResults/
 coverage/
 *.coverage
 *.coveragexml
+StrykerOutput/
+.stryker-tmp/
 
 # Local application data
 *.db

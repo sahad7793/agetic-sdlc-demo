@@ -23,6 +23,90 @@ public class TaskServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_TrimsFieldsAndStoresTask()
+    {
+        var repository = new FakeTaskRepository();
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.CreateAsync(
+            new CreateTaskRequest { Title = "  New task  ", Description = "  Details  " },
+            CancellationToken.None);
+
+        repository.Task.Should().NotBeNull();
+        repository.Task!.Title.Should().Be("New task");
+        repository.Task.Description.Should().Be("Details");
+        result.Id.Should().Be(repository.Task.Id);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_ReturnsTaskWhenFound()
+    {
+        var task = new TaskItem { Id = Guid.NewGuid(), Title = "Task", CreatedAt = DateTime.UtcNow };
+        var service = new TaskService(new FakeTaskRepository { Task = task }, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetByIdAsync(task.Id, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.Id.Should().Be(task.Id);
+        result.Title.Should().Be(task.Title);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_ReturnsNullWhenTaskDoesNotExist()
+    {
+        var service = CreateService();
+
+        var result = await service.GetByIdAsync(Guid.NewGuid(), CancellationToken.None);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RejectsPastDueDate()
+    {
+        var service = CreateService();
+
+        var action = () => service.UpdateAsync(
+            Guid.NewGuid(),
+            new UpdateTaskRequest { Title = "Past task", DueDate = DateTime.UtcNow.AddDays(-1) },
+            CancellationToken.None);
+
+        await action.Should().ThrowAsync<BusinessRuleViolationException>()
+            .WithMessage("*DueDate cannot be in the past*");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_UpdatesExistingTask()
+    {
+        var task = new TaskItem { Id = Guid.NewGuid(), Title = "Old title", CreatedAt = DateTime.UtcNow };
+        var repository = new FakeTaskRepository { Task = task };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.UpdateAsync(
+            task.Id,
+            new UpdateTaskRequest { Title = "  New title  ", Description = "  New details  " },
+            CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.Title.Should().Be("New title");
+        result.Description.Should().Be("New details");
+        repository.UpdateCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ReturnsNullWhenTaskDoesNotExist()
+    {
+        var service = CreateService();
+
+        var result = await service.UpdateAsync(
+            Guid.NewGuid(),
+            new UpdateTaskRequest { Title = "Missing task" },
+            CancellationToken.None);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
     public async Task UpdateStatusAsync_RejectsTodoToDoneTransition()
     {
         var repository = new FakeTaskRepository
@@ -72,6 +156,45 @@ public class TaskServiceTests
 
         inProgress!.Status.Should().Be(TaskItemStatus.InProgress);
         completed!.Status.Should().Be(TaskItemStatus.Done);
+        repository.UpdateCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ReturnsNullWhenTaskDoesNotExist()
+    {
+        var service = CreateService();
+
+        var result = await service.UpdateStatusAsync(
+            Guid.NewGuid(),
+            new UpdateTaskStatusRequest { Status = TaskItemStatus.InProgress },
+            CancellationToken.None);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_DeletesExistingTask()
+    {
+        var repository = new FakeTaskRepository
+        {
+            Task = new TaskItem { Id = Guid.NewGuid(), Title = "Task", CreatedAt = DateTime.UtcNow }
+        };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.DeleteAsync(repository.Task.Id, CancellationToken.None);
+
+        result.Should().BeTrue();
+        repository.Task.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ReturnsFalseWhenTaskDoesNotExist()
+    {
+        var service = CreateService();
+
+        var result = await service.DeleteAsync(Guid.NewGuid(), CancellationToken.None);
+
+        result.Should().BeFalse();
     }
 
     [Fact]
@@ -200,6 +323,7 @@ public class TaskServiceTests
     {
         public TaskItem? Task { get; set; }
         public List<TaskItem> Tasks { get; set; } = [];
+        public int UpdateCalls { get; private set; }
 
         public Task<IReadOnlyList<TaskItem>> GetAllAsync(
             TaskItemStatus? status,
@@ -236,8 +360,11 @@ public class TaskServiceTests
             return System.Threading.Tasks.Task.CompletedTask;
         }
 
-        public Task UpdateAsync(TaskItem task, CancellationToken cancellationToken) =>
-            System.Threading.Tasks.Task.CompletedTask;
+        public Task UpdateAsync(TaskItem task, CancellationToken cancellationToken)
+        {
+            UpdateCalls++;
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
 
         public Task DeleteAsync(TaskItem task, CancellationToken cancellationToken)
         {

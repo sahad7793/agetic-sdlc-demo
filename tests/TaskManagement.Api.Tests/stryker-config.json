@@ -1,0 +1,16 @@
+{
+  "stryker-config": {
+    "project": "TaskManagement.Api.csproj",
+    "mutate": [
+      "**/Services/TaskService.cs"
+    ],
+    "test-case-filter": "FullyQualifiedName~TaskServiceTests",
+    "configuration": "Release",
+    "mutation-level": "Standard",
+    "concurrency": 2,
+    "reporters": [
+      "html",
+      "progress"
+    ]
+  }
+}
