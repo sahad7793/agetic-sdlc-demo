@@ -65,6 +65,18 @@ Keep the app and test projects on `net8.0`; coordinate any tool upgrade with its
 runtime requirements. See [Mutation testing](docs/agentic-sdlc.md#mutation-testing)
 for scope and CI policy.
 
+## EF Core migration safety
+
+Pull requests changing EF Core migrations or the data model run a read-only,
+advisory migration check. It verifies the model snapshot, reports potentially
+destructive operations in newly added migrations, and uploads an idempotent SQL
+script for those migrations. The check uses a design-time context and makes no
+database connections; it has no secrets or real-environment database access
+and does not block on migration findings. Tooling errors remain visible as job
+failures.
+See [EF Core migration safety](docs/agentic-sdlc.md#ef-core-migration-safety)
+for scope and limitations.
+
 ## Architecture
 
 - **Controllers** expose HTTP endpoints and map service results to HTTP responses.

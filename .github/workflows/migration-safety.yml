@@ -1,0 +1,122 @@
+name: EF Core migration safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".config/dotnet-tools.json"
+      - ".github/workflows/migration-safety.yml"
+      - "global.json"
+      - "scripts/migration_safety.py"
+      - "src/TaskManagement.Api/Data/**"
+      - "src/TaskManagement.Api/Domain/**"
+      - "src/TaskManagement.Api/Migrations/**"
+      - "src/TaskManagement.Api/Program.cs"
+      - "src/TaskManagement.Api/TaskManagement.Api.csproj"
+      - "tests/migration_safety/**"
+
+permissions:
+  contents: read
+
+jobs:
+  migration-safety:
+    name: EF Core migration safety (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source and trusted base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Initialize migration report
+        run: |
+          mkdir -p "$RUNNER_TEMP/migration-safety"
+          {
+            echo "## EF Core migration safety (advisory)"
+            echo
+            echo "The report is informational only; destructive-operation findings do not fail this job."
+            echo
+          } > "$RUNNER_TEMP/migration-safety/report.md"
+
+      - name: Restore tools and API
+        run: |
+          dotnet tool restore
+          dotnet restore src/TaskManagement.Api/TaskManagement.Api.csproj
+
+      - name: Check snapshot for pending model changes
+        env:
+          REPORT: ${{ runner.temp }}/migration-safety/report.md
+          CHECK_LOG: ${{ runner.temp }}/migration-safety/model-check.log
+        run: |
+          set +e
+          dotnet ef migrations has-pending-model-changes \
+            --project src/TaskManagement.Api/TaskManagement.Api.csproj \
+            --startup-project src/TaskManagement.Api/TaskManagement.Api.csproj \
+            --configuration Release > "$CHECK_LOG" 2>&1
+          result=$?
+          set -e
+          if [ "$result" -eq 0 ]; then
+            echo "Model snapshot check: no pending model changes." >> "$REPORT"
+          elif grep -Eiq 'pending changes|pending model changes|changes have been made to the model' "$CHECK_LOG"; then
+            echo "Model snapshot check: **advisory warning** — EF Core reports pending model changes; add and review a migration." >> "$REPORT"
+            cat "$CHECK_LOG" >> "$REPORT"
+          else
+            cat "$CHECK_LOG" >&2
+            exit "$result"
+          fi
+          echo >> "$REPORT"
+
+      - name: Analyze new migrations and generate SQL
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPORT: ${{ runner.temp }}/migration-safety/report.md
+          SQL_SCRIPT: ${{ runner.temp }}/migration-safety/new-migrations.sql
+        run: |
+          python3 scripts/migration_safety.py report \
+            --base-revision "$BASE_SHA" \
+            --output "$RUNNER_TEMP/migration-safety/destructive-operations.md" \
+            >> "$REPORT"
+          migration_ids=$(python3 scripts/migration_safety.py list-new --base-revision "$BASE_SHA")
+          if [ -n "$migration_ids" ]; then
+            previous=$(python3 scripts/migration_safety.py previous --base-revision "$BASE_SHA")
+            latest=$(printf '%s\n' "$migration_ids" | tail -n 1)
+            dotnet ef migrations script "$previous" "$latest" --idempotent \
+              --project src/TaskManagement.Api/TaskManagement.Api.csproj \
+              --startup-project src/TaskManagement.Api/TaskManagement.Api.csproj \
+              --configuration Release \
+              --output "$SQL_SCRIPT"
+            echo "Generated an idempotent SQL script for migrations from \`$previous\` through \`$latest\`." >> "$REPORT"
+          else
+            echo "No new migration SQL script was generated because this pull request adds no migration." >> "$REPORT"
+          fi
+          echo >> "$REPORT"
+
+      - name: Publish migration report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/migration-safety/report.md
+        run: |
+          if [ -f "$REPORT" ]; then
+            cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## EF Core migration safety (advisory)" >> "$GITHUB_STEP_SUMMARY"
+            echo "The report could not be created; inspect earlier step errors." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload migration report and SQL
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ef-migration-safety
+          path: ${{ runner.temp }}/migration-safety/
+          if-no-files-found: warn
+          retention-days: 14
