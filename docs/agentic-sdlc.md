@@ -7,9 +7,18 @@ This repository uses agents to accelerate implementation and review, while peopl
 1. File a feature or bug using the structured issue forms. Include measurable acceptance criteria and the affected area.
 2. A maintainer reviews, clarifies, and approves the issue before implementation begins.
 3. Assign the approved issue to GitHub Copilot coding agent, or select **Open in Copilot** from the issue. The agent (or a human) works in an isolated branch and opens a pull request that links the issue.
-4. CI runs restore, build, tests with coverage collection, and CodeQL analysis. Relevant API pull requests also get an advisory OpenAPI change report. Dependabot opens weekly update PRs for NuGet packages and GitHub Actions.
-5. A human reviewer uses the PR template, code review, test results, and any advisory agent review to check architecture, validation, business rules, and regression coverage.
+4. CI runs restore, build, tests with coverage collection, and CodeQL analysis. Relevant API pull requests get an advisory OpenAPI change report; relevant same-repository pull requests also get a bounded advisory security-review comment. Neither advisory replaces CodeQL or blocks a pull request. Dependabot opens weekly update PRs for NuGet packages and GitHub Actions.
+5. A human reviewer uses the PR template, code review, test results, and advisory reports to check architecture, validation, business rules, and regression coverage. A security review with no concrete findings is not proof of safety.
 6. After required CI checks are green and a human approval is present, a human merges the PR. Agents never approve or merge pull requests by themselves.
+
+### Test coverage reporting
+
+CI collects Coverlet Cobertura output from the .NET test project and reports
+aggregate line and branch coverage in the Actions job summary. The raw Cobertura
+reports and generated summary remain available in the `test-results` artifact.
+Coverage reporting is advisory only; it does not apply a percentage threshold or
+fail CI based on coverage. Adding a blocking threshold requires an explicit
+maintainer decision and a separate change.
 
 See the [agent security policy](agent-security-policy.md) for safeguards
 against prompt injection and for the boundaries on permissions, secrets, and
@@ -39,7 +48,7 @@ GitHub Actions workflow.
 | Solution design | [`plan-agent`](../.github/workflows/plan-agent.md), following the [`architect`](../.github/agents/architect.agent.md) profile | Human reviewer accepts or rejects the design and any Proposed ADR before implementation. |
 | Implementation verification | [`test-engineer`](../.github/agents/test-engineer.agent.md) | Human author/reviewer verifies test intent and CI results. |
 | Pull request review | Native Copilot code review (when enabled) and [`reviewer`](../.github/agents/reviewer.agent.md) | Human reviewer validates findings and provides required approval; agents never approve or merge. |
-| Security review | [`security-reviewer`](../.github/agents/security-reviewer.agent.md) | Maintainer reviews findings and approves any security-sensitive remediation. |
+| Security review | [`security-review`](../.github/workflows/security-review.md), using the [`security-reviewer`](../.github/agents/security-reviewer.agent.md) profile | The advisory review covers only configured PR paths and the reviewed revision; maintainers assess findings and approve any security-sensitive remediation. No finding is not assurance; agents never approve or merge. |
 | Release preparation | [`release-manager`](../.github/agents/release-manager.agent.md) | Human verifies drafts and separately authorizes any publication. |
 | Incident response | [`ops-investigator`](../.github/agents/ops-investigator.agent.md) | Incident commander decides commands, rollback, and any production action. |
 
@@ -617,6 +626,35 @@ runs against a deployed staging or production environment automatically.
 - **The staging smoke job is not run by this change, or by any automation.**
   It exists as an opt-in, double-confirmed, read-only capability for a human
   to use deliberately; nothing in this repository schedules or triggers it.
+
+## Mutation testing
+
+`.github/workflows/mutation-testing.yml` runs a bounded Stryker.NET pilot for
+the `TaskService` business rules. Pull requests run it only when the service,
+its focused tests, project/tool configuration, SDK pin, or workflow changes;
+maintainers can also dispatch it manually. The job has a 15-minute timeout,
+uses at most two mutation workers, and filters test execution to
+`TaskServiceTests`. The committed `stryker-config.json` restricts mutation to
+`TaskService.cs`; controller, repository, migration, and infrastructure code
+are outside this pilot.
+
+The local `dotnet-stryker` tool is pinned in `.config/dotnet-tools.json` at
+version 4.16.0, which runs on the repository's .NET 8 runtime. The API and test
+project remain on `net8.0`; this pilot does not change `global.json` or add a
+runtime package dependency. Run it locally with:
+
+```bash
+dotnet tool restore
+cd tests/TaskManagement.Api.Tests
+dotnet stryker
+```
+
+The workflow writes the mutation score to the job summary and uploads Stryker's
+HTML report and run log for 14 days. This is an **advisory report**: mutation
+scores do not fail the job, set a required check, or change branch protection.
+Build, restore, and test-runner errors remain visible as workflow failures.
+Review surviving mutants for meaningful behavior gaps; do not add assertions
+solely to kill logging or other non-business mutations.
 
 ## Observability
 

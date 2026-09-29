@@ -28,6 +28,9 @@ jobs:
       - name: Test CI workflow permissions
         run: python3 -m unittest discover -s tests/ci_workflow
 
+      - name: Test coverage report
+        run: python3 -m unittest discover -s tests/coverage_report
+
       - name: Test agentic workflow contracts
         run: python3 -m unittest discover -s tests/agentic_workflows
 
@@ -75,6 +78,9 @@ jobs:
 
       - name: Test with coverage
         run: dotnet test TaskManagementDemo.sln --configuration Release --no-build --collect:"XPlat Code Coverage" --results-directory TestResults
+
+      - name: Report test coverage
+        run: python3 scripts/coverage_report.py --results-directory TestResults --report TestResults/coverage-summary.md
 
       - name: Upload test results
         if: always()

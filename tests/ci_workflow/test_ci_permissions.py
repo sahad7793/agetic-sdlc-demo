@@ -37,6 +37,21 @@ class CiWorkflowPermissionTests(unittest.TestCase):
             r"          upload: false$",
         )
 
+    def test_coverage_report_runs_after_tests_and_before_artifact_upload(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        test_step = text.index("      - name: Test with coverage")
+        report_step = text.index("      - name: Report test coverage")
+        upload_step = text.index("      - name: Upload test results")
+
+        self.assertLess(test_step, report_step)
+        self.assertLess(report_step, upload_step)
+        self.assertIn(
+            "run: python3 scripts/coverage_report.py --results-directory TestResults "
+            "--report TestResults/coverage-summary.md",
+            text[report_step:upload_step],
+        )
+        self.assertIn("path: TestResults", text[upload_step:])
+
 
 if __name__ == "__main__":
     unittest.main()
