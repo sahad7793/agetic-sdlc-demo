@@ -7,20 +7,19 @@ This runbook explains how to trigger and monitor Azure alert-to-issue publicatio
 ### Required Always
 - **AZURE_ALERTS_ENABLED**: `'true'` — Enables the entire alert polling infrastructure. Without this, no polls run.
 
-### For Publication (Manual and Scheduled)
-- **AZURE_ALERTS_PUBLISH_ENABLED**: `'true'` — Enables issue creation. Required for both manual targeted publication AND legacy scheduled publication (backward compatibility). Manual publish: **required**. Scheduled publish: required unless `AZURE_ALERTS_SCHEDULE_ENABLED` is set.
+### For Manual Targeted Publication
+- **AZURE_ALERTS_PUBLISH_ENABLED**: `'true'` — Enables manual issue creation. Required for manual targeted publication; it does not enable scheduled publication.
 
-### For Scheduled Publication Only (New)
-- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` — Enables scheduled multi-alert publication without requiring `AZURE_ALERTS_PUBLISH_ENABLED`. Optional. If set to `'true'`, scheduled runs publish alerts even if `AZURE_ALERTS_PUBLISH_ENABLED` is absent or `'false'`.
+### For Scheduled Publication Only
+- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` — Explicitly enables scheduled multi-alert publication. Unset or any value other than `'true'` disables scheduled publication, regardless of `AZURE_ALERTS_PUBLISH_ENABLED`.
 
 | Scenario | AZURE_ALERTS_ENABLED | AZURE_ALERTS_PUBLISH_ENABLED | AZURE_ALERTS_SCHEDULE_ENABLED | Polls Run | Publishes | Notes |
 |----------|--------|----------|----------|-----------|-----------|--------|
 | **Disabled** | (any) | (any) | (any) | ❌ No | ❌ No | Entire system off |
 | **Manual poll (dry-run)** | `'true'` | (any) | (any) | ✅ Yes | ❌ No | Inspect alerts without publishing |
 | **Manual publish (targeted)** | `'true'` | `'true'` | (any) | ✅ Yes | ✅ Yes | **Requires 64-hex alert fingerprint** |
-| **Scheduled (legacy)** | `'true'` | `'true'` | (any) | ✅ Yes | ✅ Yes | Backward compatible; publishes all fired alerts |
-| **Scheduled (new)** | `'true'` | (any) | `'true'` | ✅ Yes | ✅ Yes | New flag; independent of AZURE_ALERTS_PUBLISH_ENABLED |
-| **Scheduled (disabled)** | `'true'` | `'false'` | (absent/false) | ✅ Yes | ❌ No | Polls run but don't publish |
+| **Scheduled (enabled)** | `'true'` | (any) | `'true'` | ✅ Yes | ✅ Yes | Publishes all fired alerts |
+| **Scheduled (disabled)** | `'true'` | `'true'` or any | (unset/other) | ❌ No | ❌ No | Schedule is not authorized |
 
 ## Manual Targeted Publication
 
@@ -33,7 +32,7 @@ This runbook explains how to trigger and monitor Azure alert-to-issue publicatio
 1. Go to **Actions** → **Azure Alert to Issue** → **Run workflow**
 2. Select branch: `main` (or your working branch)
 3. Fill in:
-   - **mode**: `publish` (triggers alert poll + issue creation)
+   - **mode**: `poll` (triggers the configured live alert poll)
    - **publish**: `true` (enables issue creation)
    - **alert_fingerprint**: Paste the exact **64-hex fingerprint** (required)
 4. Click **Run workflow**
@@ -45,14 +44,9 @@ Alert fingerprints are **deterministic hashes** of alert rule name and time-seri
 1. **GitHub issue body** (existing alerts already published):
    - Look for `fingerprint: <64-hex>` in the issue description under "Alert Details"
 
-2. **Workflow logs** (from recent scheduled or manual dry-run):
-   - Go to **Actions** → workflow run
-   - Check **poll-dry-run** or **poll-publish** logs
-   - Search for `fingerprint:` (each fired alert is logged with its fingerprint during poll)
-
-3. **Azure Monitor** → your alert rule → Fired Alerts tab:
+2. **Azure Monitor** → your alert rule → Fired Alerts tab:
    - No fingerprint shown directly in Azure UI
-   - Run a manual dry-run (`mode: poll, publish: false`) to see all fingerprints
+   - The poller does not log alert payloads or fingerprints. Use an existing published issue's fingerprint, or obtain the fingerprint through an approved internal process before targeted publication.
 
 ### Behavior: Manual Targeted Publish
 
@@ -69,16 +63,16 @@ Alert fingerprints are **deterministic hashes** of alert rule name and time-seri
 ```bash
 gh workflow run azure-alert-to-issue.yml \
   --ref main \
-  -f mode=publish \
+  -f mode=poll \
   -f publish=true \
-  -f alert_fingerprint="a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2"
+  -f alert_fingerprint="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 ```
 
 (Fingerprint must be exactly 64 lowercase hexadecimal characters.)
 
 ## Manual Dry-Run (Poll Only)
 
-**When to use**: Inspect all fired alerts without creating issues. Validate fingerprints or test configuration.
+**When to use**: Check that the configured Azure poll runs without creating issues.
 
 **How to trigger**:
 1. Go to **Actions** → **Azure Alert to Issue** → **Run workflow**
@@ -89,37 +83,30 @@ gh workflow run azure-alert-to-issue.yml \
    - **alert_fingerprint**: (leave empty—ignored for dry-run)
 4. Click **Run workflow**
 
-**Behavior**: Polls Azure, logs all fired alerts with their fingerprints, creates no issues. Check logs to find fingerprints for targeted publish.
+**Behavior**: Polls Azure and reports aggregate counts without creating issues or logging alert payloads. A dry run does not reveal fingerprints.
 
 ## Scheduled Publication
 
 ### How Scheduled Runs Work
 
-A **cron schedule** (`0 */2 * * *`) polls Azure every 2 hours. Fires publish only if **at least one** of the publication flags is `'true'`:
+A **cron schedule** (`17 */2 * * *`) runs every 2 hours. It starts only when both `AZURE_ALERTS_ENABLED` and `AZURE_ALERTS_SCHEDULE_ENABLED` are `'true'`:
 
 ```
-if: AZURE_ALERTS_ENABLED == 'true' && 
-    (AZURE_ALERTS_PUBLISH_ENABLED == 'true' OR AZURE_ALERTS_SCHEDULE_ENABLED == 'true')
+if: AZURE_ALERTS_ENABLED == 'true' &&
+    AZURE_ALERTS_SCHEDULE_ENABLED == 'true'
 ```
 
 When fired, publishes **all new alerts** (deduplication by fingerprint prevents re-publishing).
 
 ### Controlling Scheduled Publication
 
-**To disable scheduled publish** (keep polling but don't create issues):
+**To disable scheduled publication**:
 ```
 AZURE_ALERTS_ENABLED: true
-AZURE_ALERTS_PUBLISH_ENABLED: false (or unset)
 AZURE_ALERTS_SCHEDULE_ENABLED: false (or unset)
 ```
 
-**To enable scheduled publish** (backward compatible, use legacy flag):
-```
-AZURE_ALERTS_ENABLED: true
-AZURE_ALERTS_PUBLISH_ENABLED: true
-```
-
-**To enable scheduled publish** (new separate flag):
+**To enable scheduled publish**:
 ```
 AZURE_ALERTS_ENABLED: true
 AZURE_ALERTS_SCHEDULE_ENABLED: true
@@ -152,14 +139,14 @@ Skipped alerts (duplicates, resolved) do not cause the workflow to fail or warn�
 ### Workflow Dispatch Inputs (Manual Trigger)
 
 - **mode**: `poll` or `publish` (required; controls alert polling)
-- **publish**: `true` or `false` (required; `true` enables issue creation only for mode=publish)
+- **publish**: `true` or `false` (required; `true` enables issue creation only for mode=poll)
 - **alert_fingerprint**: 64-hex string (optional; required if `publish=true`)
 
 ### Repository Variables (Settings → Variables and Secrets)
 
 - **AZURE_ALERTS_ENABLED**: `'true'` (enables polling infrastructure)
-- **AZURE_ALERTS_PUBLISH_ENABLED**: `'true'` (enables manual publish and/or legacy scheduled publish)
-- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` (enables new scheduled publish path)
+- **AZURE_ALERTS_PUBLISH_ENABLED**: `'true'` (enables manual targeted publication)
+- **AZURE_ALERTS_SCHEDULE_ENABLED**: `'true'` (explicitly enables scheduled multi-alert publication; unset disables it)
 
 Set these at the repository level in GitHub Settings. They persist across runs.
 
@@ -171,11 +158,11 @@ The workflow uses a protected environment `azure-alerts` with OIDC-based Azure l
 
 ### "publication is not explicitly enabled"
 - Manual publish: Set `AZURE_ALERTS_PUBLISH_ENABLED: 'true'` in repo variables
-- Scheduled publish: Set `AZURE_ALERTS_PUBLISH_ENABLED: 'true'` OR `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'`
+- Scheduled publish: Set `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'`; `AZURE_ALERTS_PUBLISH_ENABLED` does not enable the schedule
 
 ### "Manual alert publishing requires a target alert fingerprint (64-hex)"
-- You triggered manual publish (`mode=publish, publish=true`) but left `alert_fingerprint` empty or provided invalid hex
-- Get the fingerprint from a dry-run, or find it in an existing GitHub issue body
+- You triggered manual publish (`mode=poll, publish=true`) but left `alert_fingerprint` empty or provided invalid hex
+- Use the fingerprint from an existing GitHub issue body or obtain it through an approved internal process; dry-run logs intentionally do not reveal it
 - Retry with valid 64-hex fingerprint
 
 ### "No alert matched fingerprint X"
@@ -189,9 +176,9 @@ The workflow uses a protected environment `azure-alerts` with OIDC-based Azure l
 
 ### Scheduled run never fires
 - Check `AZURE_ALERTS_ENABLED: 'true'` is set
-- Check `AZURE_ALERTS_PUBLISH_ENABLED: 'true'` OR `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'` is set
+- Check `AZURE_ALERTS_SCHEDULE_ENABLED: 'true'` is set; `AZURE_ALERTS_PUBLISH_ENABLED` alone is insufficient
 - Check Azure environment (azure-alerts) is configured with valid OIDC credentials
-- Check cron schedule (currently `0 */2 * * *` = every 2 hours UTC)
+- Check cron schedule (currently `17 */2 * * *` = every 2 hours UTC)
 
 ## Related Documentation
 

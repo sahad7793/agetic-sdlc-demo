@@ -82,22 +82,24 @@ class RunPlanTests(unittest.TestCase):
         ))
         self.assertEqual((ready, publish), (True, True))
 
-    def test_schedule_is_skipped_without_publish_opt_in(self):
+    def test_schedule_is_skipped_without_schedule_opt_in(self):
         for value in (None, "", "false", "yes"):
             ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
-                ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED=value
+                ALERT_TRIGGER="schedule", AZURE_ALERTS_SCHEDULE_ENABLED=value,
+                AZURE_ALERTS_PUBLISH_ENABLED="true"
             ))
             self.assertEqual((ready, publish, fingerprint), (False, False, None))
         ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
-            ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED="true"
+            ALERT_TRIGGER="schedule", AZURE_ALERTS_SCHEDULE_ENABLED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="false"
         ))
         self.assertEqual((ready, publish, fingerprint), (True, True, None))
 
-    def test_missing_configuration_is_not_ready(self):
-        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(AZURE_CLIENT_ID=None))
-        self.assertEqual((ready, publish, fingerprint), (False, False, None))
-        ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(AZURE_ALERTS_ENABLED="false"))
-        self.assertEqual((ready, publish, fingerprint), (False, False, None))
+    def test_invalid_configuration_fails_explicitly(self):
+        with self.assertRaisesRegex(ValueError, "Azure client ID is missing or invalid"):
+            alert_to_issue.run_plan(self.environment(AZURE_CLIENT_ID=None))
+        with self.assertRaisesRegex(ValueError, "polling is not explicitly enabled"):
+            alert_to_issue.run_plan(self.environment(AZURE_ALERTS_ENABLED="false"))
 
     def test_unknown_trigger_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "schedule or manual dispatch"):
@@ -348,20 +350,31 @@ class ScheduledVsManualControlTests(unittest.TestCase):
         values.update(overrides)
         return {key: value for key, value in values.items() if value is not None}
 
-    def test_schedule_requires_publish_enabled_for_backward_compatibility(self):
+    def test_legacy_publish_flag_does_not_enable_schedule(self):
         ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
             AZURE_ALERTS_PUBLISH_ENABLED="true"
         ))
-        self.assertEqual((ready, publish, fingerprint), (True, True, None))
+        self.assertEqual((ready, publish, fingerprint), (False, False, None))
 
     def test_schedule_can_use_new_schedule_enabled_flag(self):
         ready, publish, fingerprint = alert_to_issue.run_plan(self.environment(
             AZURE_ALERTS_SCHEDULE_ENABLED="true",
-            AZURE_ALERTS_PUBLISH_ENABLED="true"
+            AZURE_ALERTS_PUBLISH_ENABLED="false"
         ))
         self.assertEqual((ready, publish, fingerprint), (True, True, None))
 
-    def test_schedule_skipped_without_either_publish_flag(self):
+    def test_scheduled_publish_gate_uses_only_schedule_flag(self):
+        alert_to_issue.require_publishing_enabled(self.environment(
+            AZURE_ALERTS_SCHEDULE_ENABLED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="false"
+        ))
+        with self.assertRaisesRegex(ValueError, "Scheduled Azure alert issue publication"):
+            alert_to_issue.require_publishing_enabled(self.environment(
+                AZURE_ALERTS_SCHEDULE_ENABLED="false",
+                AZURE_ALERTS_PUBLISH_ENABLED="true"
+            ))
+
+    def test_schedule_skipped_without_schedule_flag(self):
         ready, publish, fingerprint = alert_to_issue.run_plan(self.environment())
         self.assertEqual((ready, publish, fingerprint), (False, False, None))
 

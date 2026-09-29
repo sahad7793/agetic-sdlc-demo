@@ -79,10 +79,9 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
     def test_schedule_requires_independent_publish_opt_in(self):
         condition = self._job("configuration", "poll-dry-run").split("runs-on:", 1)[0]
         self.assertIn("vars.AZURE_ALERTS_ENABLED == 'true' &&", condition)
-        # Accept either legacy AZURE_ALERTS_PUBLISH_ENABLED or new AZURE_ALERTS_SCHEDULE_ENABLED
         self.assertIn("github.event_name == 'schedule'", condition)
-        self.assertIn("vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'", condition)
         self.assertIn("vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true'", condition)
+        self.assertNotIn("vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'", condition)
         self.assertIn("(github.event_name == 'workflow_dispatch' && inputs.mode == 'poll')", condition)
         configuration_job = self._job("configuration", "poll-dry-run")
         self.assertIn("ALERT_TRIGGER: ${{ github.event_name }}", configuration_job)
@@ -106,9 +105,13 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
     def test_publish_job_requires_publish_plan_and_opt_in(self):
         publish = self._job("poll-publish", None)
         self.assertIn("needs.configuration.outputs.publish == 'true'", publish)
-        self.assertIn("vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'", publish)
+        self.assertIn("github.event_name == 'schedule' && vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true'", publish)
+        self.assertIn("github.event_name == 'workflow_dispatch' && vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'", publish)
         self.assertIn(
             "AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}", publish
+        )
+        self.assertIn(
+            "AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}", publish
         )
         self.assertIn("python3 scripts/azure_alert_to_issue.py poll --publish", publish)
         self.assertNotIn("inputs.publish", publish)

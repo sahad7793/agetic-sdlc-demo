@@ -80,8 +80,12 @@ def publishing_enabled(environ):
 
 
 def require_publishing_enabled(environ):
-    require(publishing_enabled(environ),
-            "Azure alert issue publication is not explicitly enabled.")
+    if environ.get("ALERT_TRIGGER") == "schedule":
+        require(schedule_enabled(environ),
+                "Scheduled Azure alert issue publication is not explicitly enabled.")
+    else:
+        require(publishing_enabled(environ),
+                "Azure alert issue publication is not explicitly enabled.")
 
 
 def schedule_enabled(environ):
@@ -105,15 +109,10 @@ def run_plan(environ):
     trigger = environ.get("ALERT_TRIGGER", "")
     require(trigger in {"schedule", "workflow_dispatch"},
             "Live alert polling only runs from a schedule or manual dispatch.")
-    try:
-        validate_configuration(environ)
-    except ValueError:
-        return False, False, None
+    validate_configuration(environ)
     
     if trigger == "schedule":
-        # Scheduled runs: support both legacy AZURE_ALERTS_PUBLISH_ENABLED and new AZURE_ALERTS_SCHEDULE_ENABLED
-        # Require at least one to be true for publication
-        publish = publishing_enabled(environ) or schedule_enabled(environ)
+        publish = schedule_enabled(environ)
         return publish, publish, None
     
     # Manual dispatch (workflow_dispatch)
