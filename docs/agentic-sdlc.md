@@ -301,6 +301,49 @@ Inputs:
 - `create_draft_release` (default `false`) — when `true`, also saves a
   **draft** GitHub Release with the generated notes.
 
+### First release readiness
+
+This repository has no Git tags, GitHub Releases, or changelog file, and its
+projects do not declare a product release version or versioning policy. The
+example `v0.1.0` in the workflow input is illustrative, not an approved
+version. The owner must choose the version/tag convention and release scope
+before preparing a first release; do not infer either from the .NET SDK version
+or NuGet dependency versions.
+
+The Release notes workflow prepares notes only. It does not build or test the
+application, publish packages or images, deploy, verify production health, or
+check for open incidents. Before authorizing publication, the release owner
+must:
+
+1. Identify the exact commit on `main` that is in scope and confirm that its CI
+   build and tests succeeded. For an auditable first run, use that commit SHA
+   as `target_commitish` rather than relying on a moving branch name.
+2. Choose the release version/tag and review the full-history notes. Since no
+   prior tag exists, leave `previous_tag_name` blank to cover the history up to
+   the selected target commit.
+3. Check that the notes accurately describe the merged changes and satisfy any
+   application-specific release, incident, and deployment readiness criteria.
+   Generated notes reflect merged PR metadata; they are not evidence that the
+   application was deployed or is healthy.
+4. Review the draft and explicitly approve publication of that exact version,
+   target commit, and notes. If the release represents a production deployment,
+   separately verify the required deployment approval and health evidence.
+
+For notes-only validation, run **Actions > Release notes > Run workflow** with
+`create_draft_release` left at `false`. This runs only the read-only
+`contents: read` generation job. Set `create_draft_release` to `true` only
+after deciding that a GitHub draft should be saved: that separate job has
+`contents: write`, but still does not publish. There is no GitHub Environment
+approval gate on that draft job.
+
+**Publication is a separate, human-only gate.** A maintainer with the
+necessary repository access must open the reviewed draft and explicitly click
+**Publish release** in GitHub. That action publishes the Release and creates
+the tag for a new version; neither the notes-only run nor saving a draft
+creates that tag. Repository branch/tag protection and access settings are
+configured outside this repository, so the owner must verify the live settings
+in GitHub before relying on them as additional enforcement.
+
 ### Provenance and no-fabrication guarantee
 
 The notes body comes entirely from GitHub's own

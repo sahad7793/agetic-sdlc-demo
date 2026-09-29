@@ -99,5 +99,5 @@ before comparing periods.
 
 Use **Actions > Release notes > Run workflow** to generate a truthful, human-reviewable
 draft of merged changes without publishing anything; see
-[Release notes](docs/agentic-sdlc.md#release-notes) for provenance, permissions, and
-limitations.
+[Release notes](docs/agentic-sdlc.md#release-notes) for the first-release readiness
+checklist, exact human publication gate, provenance, permissions, and limitations.
