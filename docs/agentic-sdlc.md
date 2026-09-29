@@ -526,6 +526,49 @@ Azure alert, page responders, or trigger rollback/remediation.
 
 For setup details, see Microsoft's [Azure Monitor alert-instance guidance](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-manage-alert-instances), [Alerts Management `Get All` API](https://learn.microsoft.com/en-us/rest/api/alerts-management/alerts/alerts/get-all?view=rest-alerts-management-alerts-2019-03-01), [Azure Monitor RBAC actions](https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/monitor), and [GitHub Actions OIDC with Azure](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect). No live Azure credentials or resources are required to run the fixture and unit tests. The original gap tracker was not present in this workspace, so this documentation records the implemented item.
 
+### Advisory incident investigation (`o2-incident-agent`)
+
+`.github/workflows/incident-investigation.md` activates only when a human
+applies the existing `incident` label to an issue. The label remains in place.
+The agent verifies the issue is open and not marked `test`, `synthetic`, or
+`drill`, then reads the current issue snapshot and recent run metadata for the
+`CI`, `Deploy`, `Azure Alert to Incident Issue`, and `Rollback` workflows.
+The evidence window is the 24 hours before the incident issue's creation time;
+the latest 10 runs per workflow are inspected. Run metadata is limited to
+timestamps, status/conclusion, commit SHA, run number, and URL. Job logs,
+artifacts, and workflow dispatch inputs are not read. A full 10-run result
+page is reported as capped/incomplete rather than exhaustive.
+
+An eligible investigation posts at most one comment through gh-aw
+`safe-outputs`. The report is tied to the issue's observed `updated_at` and the
+investigation run, cites source run URLs, separates observations from
+hypotheses, describes confidence and alternatives, and names missing evidence.
+If the issue changes while evidence is being collected, the agent posts no
+comment and asks for a fresh human label action. If no hypothesis is supported,
+it states that explicitly; it does not infer a cause from timing alone.
+
+This pilot does **not** query Azure Monitor, Application Insights, Log
+Analytics, Azure Portal, or any other telemetry source. It has only
+`actions: read` and `issues: read` in the agent job. gh-aw's generated
+activation and conclusion helper jobs also receive `issues: write`; its
+detection job receives `contents: read`. The only configured action output is
+one comment on the triggering issue, and no job has `pull-requests: write` or
+`id-token: write`. The workflow requests no Azure identity, OIDC permission,
+or credential. Telemetry is reported as **unavailable — not queried**,
+including when an issue includes a correlation ID or query link.
+There is no live Azure integration to configure for this pilot. Local
+validation uses only synthetic fixture data and requires no Azure access.
+
+Because incident intake and alert polling create issues using `GITHUB_TOKEN`,
+their issue/label events do not trigger downstream workflows. After an
+intake-generated incident issue is created, a human must remove and re-apply
+the `incident` label to request this investigation. This is an advisory
+comment only: the agent cannot add labels, dispatch or rerun workflows,
+retrieve logs, alter deployments, roll back, or modify Azure. A human retains
+all operational authority. The available incident examples used during
+development are closed synthetic test issues; no live incident or production
+telemetry was used or inferred.
+
 ## OpenAPI contract change reporting
 
 `.github/workflows/openapi-diff.yml` runs on pull requests to `main` that
