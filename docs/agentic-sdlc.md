@@ -459,7 +459,11 @@ scopes. It queries the Alerts Management REST API for the previous 24 hours
 and creates a GitHub incident only for instances whose current monitor
 condition is `Fired`. Requests select only required essential fields and
 exclude alert context and egress configuration. Runs are serialized. Every
-issue carries a stable SHA-256 fingerprint of the Azure alert instance
+push that changes the poller, its workflow, or its focused tests also runs a
+read-only validation job using the offline fixture and unit tests; it does
+not authenticate to Azure or write GitHub issues. Scheduled/manual live
+polling remains separately gated.
+Each issue carries a stable SHA-256 fingerprint of the Azure alert instance
 identity; the poller checks
 open and closed issues for that marker before creating anything. The issue
 scan is limited to 1,000 issues and the Azure poll is limited to 10 scopes,

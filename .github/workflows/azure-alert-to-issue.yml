@@ -1,6 +1,11 @@
 name: Azure Alert to Incident Issue
 
 on:
+  push:
+    paths:
+      - ".github/workflows/azure-alert-to-issue.yml"
+      - "scripts/azure_alert_to_issue.py"
+      - "tests/azure_alert_to_issue/**"
   schedule:
     - cron: "17 */2 * * *"
   workflow_dispatch:
@@ -24,6 +29,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run offline alert poller tests and fixture
+        run: |
+          python3 -m unittest discover -s tests/azure_alert_to_issue -v
+          python3 scripts/azure_alert_to_issue.py poll --fixture tests/azure_alert_to_issue/fixtures/fired_alert.json
+
   fixture:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'fixture'
     runs-on: ubuntu-latest
@@ -85,7 +107,6 @@ jobs:
       AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RUNNER_TEMP: ${{ runner.temp }}
     steps:
       - name: Check out trusted source
         uses: actions/checkout@v7
