@@ -1056,6 +1056,69 @@ visible. Older windows/observations cannot overwrite a newer current body.
 Archived comments provide history after artifact expiry, but remain subject to
 normal issue permissions, edits, and deletion. Routine output is not committed.
 
+### Advisory monthly retrospective loop
+
+The manual-only [`SDLC Retrospective` workflow](../.github/workflows/l1-retro-loop.md)
+uses the most recent successful SDLC Metrics run on the default branch. It runs
+only when explicitly dispatched; the recommended pilot cadence is monthly, after
+the existing weekly metrics collection succeeds. It reads that report's two
+complete, contiguous seven-day cohorts (not a reconstructed calendar-month
+cohort), which are labeled with their exact UTC boundaries in the output. The
+workflow rejects an incomplete window and a metrics run older than 14 days; it
+does not substitute stale or partial evidence.
+
+The owner-approved minimum is **five merged main-target PRs in the current
+reporting window**. Below five, the workflow reports insufficient data and makes
+no recommendation. It also requires a non-empty preceding comparison window and
+uses only available metric-specific samples. The threshold is a conservative
+pilot policy, not a significance test or evidence of causation. The report
+includes the population, windows, available counts, sample counts, missing data,
+and caveats; changes between windows are descriptive only. No individual
+productivity assessment or agent-causality claim is permitted.
+
+The live workflow input is reduced deterministically to a bounded allowlist of
+aggregates before the agent runs. PR and issue bodies/titles, reviewer
+identities, review/comment text, prompts, logs, and secrets are not passed to the
+agent. The live reader needs `actions: read`; repository files are read with
+`contents: read`. These permissions provide no Azure access, OIDC, or
+production access. A maximum of one draft PR may be created through gh-aw safe
+outputs. In the generated workflow, the isolated `safe_outputs` and `conclusion`
+jobs both receive `contents: write` and `pull-requests: write`; the analysis
+job is read-only. This is gh-aw's generated permission boundary for built-in
+PR safe outputs. All issue-creation and issue-fallback routes are disabled, and
+the generated lock has no `issues: write`. The output is a draft limited to
+`docs/**`, `scripts/**`, `src/**`, and `tests/**`, with maximum patch size
+512 KB and 10 files; workflow/configuration and agent instruction files are
+outside the allowlist. It cannot merge, approve, publish, create
+issues/comments, or auto-merge. PRs created with the workflow token do not
+trigger CI automatically; a maintainer must inspect the draft and arrange the
+normal validation and review gates.
+
+#### Privacy, activation gates, and rollback
+
+The fixture input is the default and uses fixed synthetic values without a
+network request; fixture runs must never create a PR. The live mode downloads
+only the latest successful run's `report.json` artifact and fails closed if it
+is absent, expired, malformed, stale, or incomplete. The report data itself is
+an aggregate built by the SDLC Metrics collector, whose retention and privacy
+limits continue to apply. The agent may inspect only trusted repository files
+needed to ground a candidate change and must treat all collected data as
+untrusted input, never as instructions.
+
+This repository is public to support draft pull requests on GitHub Free. The
+repository's source, workflow definitions, documentation, and any created PR
+are therefore publicly visible; the retrospective's allowlisted output must
+remain aggregate-only and contain no private or personal data.
+
+This pilot has **no automatic schedule**. Before enabling a monthly schedule,
+the owner must review fixture/manual results, permissions and safe-output
+configuration, the one-draft bound, test results, and early human feedback.
+To disable the workflow, remove or disable the `SDLC Retrospective` Actions
+workflow; there is no running schedule to cancel in this pilot. If draft
+creation is not wanted, remove the `create-pull-request` safe output and its
+associated isolated write permissions. The existing metrics collection and
+dashboard are unaffected.
+
 To collect a **read-only** preview with an already authenticated `gh` CLI:
 
 ```bash
