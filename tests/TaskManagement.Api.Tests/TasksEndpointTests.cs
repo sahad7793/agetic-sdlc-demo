@@ -104,6 +104,41 @@ public class TasksEndpointTests(TaskApiFactory factory) : IClassFixture<TaskApiF
     }
 
     [Fact]
+    public async Task GetOverdueCount_ReturnsCountOfOverdueNotDoneTasks()
+    {
+        await using var isolatedFactory = new TaskApiFactory();
+        await using (var scope = isolatedFactory.Services.CreateAsyncScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<TaskManagementDbContext>();
+            database.Tasks.AddRange(
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Overdue todo",
+                    Status = TaskItemStatus.Todo,
+                    DueDate = DateTime.UtcNow.AddDays(-2),
+                    CreatedAt = DateTime.UtcNow
+                },
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Overdue done",
+                    Status = TaskItemStatus.Done,
+                    DueDate = DateTime.UtcNow.AddDays(-2),
+                    CreatedAt = DateTime.UtcNow
+                });
+            await database.SaveChangesAsync();
+        }
+
+        var client = isolatedFactory.CreateClient();
+        var response = await client.GetAsync("/api/tasks/overdue/count");
+        var count = await response.Content.ReadFromJsonAsync<int>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        count.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetAll_WithDueDateFilters_UsesExclusiveBoundsAndExcludesTasksWithoutDueDate()
     {
         await SeedTasksAsync(

@@ -255,6 +255,38 @@ public class TaskServiceTests
     }
 
     [Fact]
+    public async Task GetOverdueCountAsync_CountsOnlyOverdueTasksThatAreNotDone()
+    {
+        var repository = new FakeTaskRepository
+        {
+            Tasks =
+            [
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Overdue",
+                    Status = TaskItemStatus.InProgress,
+                    DueDate = DateTime.UtcNow.AddDays(-1),
+                    CreatedAt = DateTime.UtcNow
+                },
+                new TaskItem
+                {
+                    Id = Guid.NewGuid(),
+                    Title = "Done",
+                    Status = TaskItemStatus.Done,
+                    DueDate = DateTime.UtcNow.AddDays(-1),
+                    CreatedAt = DateTime.UtcNow
+                }
+            ]
+        };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetOverdueCountAsync(CancellationToken.None);
+
+        result.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetAllAsync_AppliesExclusiveDateAndStatusFiltersAndExcludesTasksWithoutDueDate()
     {
         var dueBefore = new DateTime(2030, 1, 1);

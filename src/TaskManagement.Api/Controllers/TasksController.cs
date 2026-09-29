@@ -27,6 +27,13 @@ public class TasksController(ITaskService service, ILogger<TasksController> logg
         return Ok(await service.GetOverdueAsync(cancellationToken));
     }
 
+    [HttpGet("overdue/count")]
+    [ProducesResponseType(typeof(int), StatusCodes.Status200OK)]
+    public async Task<ActionResult<int>> GetOverdueCount(CancellationToken cancellationToken)
+    {
+        return Ok(await service.GetOverdueCountAsync(cancellationToken));
+    }
+
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(TaskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

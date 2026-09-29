@@ -25,6 +25,9 @@ public class TaskService(ITaskRepository repository, ILogger<TaskService> logger
             .ToList();
     }
 
+    public async Task<int> GetOverdueCountAsync(CancellationToken cancellationToken) =>
+        (await GetOverdueAsync(cancellationToken)).Count;
+
     public async Task<TaskResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         var task = await repository.GetByIdAsync(id, cancellationToken);
