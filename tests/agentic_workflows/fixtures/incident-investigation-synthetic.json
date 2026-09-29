@@ -1,0 +1,40 @@
+{
+  "fixture": "synthetic-only",
+  "trigger": {
+    "event": "issues.labeled",
+    "label": "incident"
+  },
+  "issue": {
+    "number": 999999,
+    "state": "open",
+    "title": "[INCIDENT][Sev4][staging] [TEST] synthetic investigation fixture",
+    "labels": ["incident", "synthetic"],
+    "created_at": "2026-09-28T10:00:00Z",
+    "updated_at": "2026-09-28T10:05:00Z",
+    "body": "Synthetic test data only. No real incident or Azure operation."
+  },
+  "workflow_runs": [
+    {
+      "workflow": "CI",
+      "run_number": 17,
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-09-28T09:30:00Z",
+      "head_sha": "0123456789abcdef0123456789abcdef01234567",
+      "html_url": "https://github.invalid/example/repo/actions/runs/1001"
+    },
+    {
+      "workflow": "Deploy",
+      "run_number": 8,
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-09-28T09:45:00Z",
+      "head_sha": "abcdef0123456789abcdef0123456789abcdef01",
+      "html_url": "https://github.invalid/example/repo/actions/runs/1002"
+    }
+  ],
+  "telemetry": {
+    "status": "unavailable",
+    "reason": "not queried; this fixture has no Azure credentials or identity"
+  }
+}
