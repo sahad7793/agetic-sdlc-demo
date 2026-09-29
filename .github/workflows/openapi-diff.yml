@@ -1,0 +1,74 @@
+name: OpenAPI contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/TaskManagement.Api/**"
+      - "docs/openapi/**"
+      - "scripts/openapi_diff.py"
+      - "tests/openapi_diff/**"
+      - ".github/workflows/openapi-diff.yml"
+      - "global.json"
+
+permissions:
+  contents: read
+
+jobs:
+  openapi-diff:
+    name: OpenAPI changes (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source and trusted base
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Build API
+        run: |
+          dotnet restore src/TaskManagement.Api/TaskManagement.Api.csproj
+          dotnet build src/TaskManagement.Api/TaskManagement.Api.csproj --configuration Release --no-restore
+
+      - name: Capture current contract
+        run: python3 scripts/openapi_diff.py capture --output "$RUNNER_TEMP/openapi/current.json"
+
+      - name: Install verified oasdiff v1.32.1
+        run: |
+          mkdir -p "$RUNNER_TEMP/openapi/bin"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/oasdiff/oasdiff/releases/download/v1.32.1/oasdiff_1.32.1_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/openapi/oasdiff.tar.gz"
+          echo "7c8939fc49b75ee11fec66a5b83b37a2fca6aee109fed85013b1ba2ac2a1ee7f  $RUNNER_TEMP/openapi/oasdiff.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/openapi/oasdiff.tar.gz" -C "$RUNNER_TEMP/openapi/bin" oasdiff
+
+      - name: Test OpenAPI report contracts
+        env:
+          OASDIFF_BIN: ${{ runner.temp }}/openapi/bin/oasdiff
+        run: python3 -m unittest discover -s tests/openapi_diff
+
+      - name: Report contract changes against base revision
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 scripts/openapi_diff.py compare \
+            --base-revision "$BASE_SHA" \
+            --current "$RUNNER_TEMP/openapi/current.json" \
+            --oasdiff "$RUNNER_TEMP/openapi/bin/oasdiff" \
+            --report "$RUNNER_TEMP/openapi/report.md"
+
+      - name: Upload contract and report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: openapi-diff
+          path: |
+            ${{ runner.temp }}/openapi/current.json
+            ${{ runner.temp }}/openapi/report.md
+          if-no-files-found: warn
+          retention-days: 14

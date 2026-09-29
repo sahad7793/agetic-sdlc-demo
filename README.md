@@ -18,6 +18,24 @@ The API persists local development data to `task-management.db`. In the Developm
 dotnet test TaskManagementDemo.sln
 ```
 
+## OpenAPI change report
+
+Pull requests changing the API or its contract tooling run a read-only, **advisory**
+OpenAPI comparison against the reviewed snapshot on the base branch. The job
+summary separates breaking changes from other consumer-facing changes; it
+also uploads the generated contract and report. To regenerate the committed
+snapshot after a reviewed contract change:
+
+```bash
+dotnet restore src/TaskManagement.Api/TaskManagement.Api.csproj
+dotnet build src/TaskManagement.Api/TaskManagement.Api.csproj -c Release --no-restore
+python3 scripts/openapi_diff.py capture --output docs/openapi/task-management-v1.json
+```
+
+Review the snapshot diff before committing it. See
+[OpenAPI contract change reporting](docs/agentic-sdlc.md#openapi-contract-change-reporting)
+for the baseline and advisory policy.
+
 ## Performance smoke test
 
 A non-destructive [k6](https://k6.io) load test runs the API locally in CI on
