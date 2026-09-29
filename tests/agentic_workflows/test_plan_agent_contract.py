@@ -94,13 +94,33 @@ class PlanAgentWorkflowContractTests(unittest.TestCase):
             "### Implementation approach",
             "### Ordered task breakdown",
             "### Dependencies and sequence",
-            "### Design impact",
+            "### Design impact & threat review",
             "### Risks and rollback considerations",
             "### Complexity estimate",
             "### Resolved and open questions",
         ):
             with self.subTest(section=section):
                 self.assertIn(section, self.text)
+
+    def test_design_impact_and_threat_review_criteria_are_explicit(self):
+        normalized_text = " ".join(self.text.split())
+        for criterion in (
+            "new endpoint or API contract change",
+            "database schema or an EF migration",
+            "authentication or identity",
+            "infrastructure or IaC",
+            "workflow or its permissions",
+            "adds a dependency",
+            "external integration",
+            "configuration changes",
+            "Design-impacting: Yes",
+            "Design-impacting: No",
+            "STRIDE categories",
+            "docs/threat-model.md",
+            "docs/adr/README.md",
+        ):
+            with self.subTest(criterion=criterion):
+                self.assertIn(criterion, normalized_text)
 
 
 if __name__ == "__main__":

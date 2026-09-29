@@ -3,7 +3,12 @@
 Use this brief checklist for PRs that change API contracts, data storage,
 identity, workflow permissions, or deployment design. Record relevant risks
 and mitigations in the PR or a linked [ADR](adr/README.md); mark unrelated
-items not applicable. This is reviewer guidance, not an automated gate.
+items not applicable. Use the current
+[STRIDE threat model](threat-model.md) as a baseline, and the
+[threat-model template](templates/threat-model-template.md) for
+design-impacting changes. The planning agent classifies those changes and
+includes an advisory design and threat review; this checklist remains
+reviewer guidance, not an automated gate.
 
 - **Boundaries and data flow:** Which actors and components can send or
   receive data? Does the change preserve controller/DTO, service-rule, and

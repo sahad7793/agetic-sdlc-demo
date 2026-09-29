@@ -25,9 +25,12 @@ agents or processing external content.
 ## Design and threat-model review (when relevant)
 
 For API contract, data, identity, workflow permission, or deployment changes,
-use `docs/design-review.md` to summarize relevant risks and mitigations.
-Link an ADR from `docs/adr/` when the change merits a lasting architecture
-decision; otherwise state N/A. A human reviewer accepts the design.
+use `docs/design-review.md` and the current `docs/threat-model.md` to
+summarize relevant risks and mitigations. Use
+`docs/templates/threat-model-template.md` for a change-specific STRIDE
+assessment when appropriate. Link an ADR from `docs/adr/` when the change
+merits a lasting architecture decision; otherwise state N/A. A human reviewer
+accepts the design.
 
 - ADR (if needed) and design/security impact:
 
