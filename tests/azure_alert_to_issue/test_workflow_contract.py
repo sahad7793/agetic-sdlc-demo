@@ -36,6 +36,8 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
         self.assertIn("vars.AZURE_ALERTS_ENABLED == 'true'", text)
         self.assertIn("options: [fixture, poll]", text)
         self.assertIn("default: false", text)
+        self.assertIn("alert_fingerprint:", text)
+        self.assertIn('default: ""', text)
 
     def _job(self, name, following):
         text = WORKFLOW.read_text(encoding="utf-8")
@@ -80,7 +82,9 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
         condition = self._job("configuration", "poll-dry-run").split("runs-on:", 1)[0]
         self.assertIn("vars.AZURE_ALERTS_ENABLED == 'true' &&", condition)
         self.assertIn(
-            "(github.event_name == 'schedule' && vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true')",
+            "(github.event_name == 'schedule' &&\n"
+            "        vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true' &&\n"
+            "        vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true')",
             condition,
         )
         self.assertIn("(github.event_name == 'workflow_dispatch' && inputs.mode == 'poll')", condition)
@@ -88,6 +92,14 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
         self.assertIn("ALERT_TRIGGER: ${{ github.event_name }}", configuration_job)
         self.assertIn(
             "ALERT_PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}",
+            configuration_job,
+        )
+        self.assertIn(
+            "ALERT_FINGERPRINT: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}",
+            configuration_job,
+        )
+        self.assertIn(
+            "AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}",
             configuration_job,
         )
         self.assertIn("publish: ${{ steps.config.outputs.publish }}", configuration_job)
@@ -107,6 +119,14 @@ class AzureAlertWorkflowContractTests(unittest.TestCase):
         self.assertIn("vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true'", publish)
         self.assertIn(
             "AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}", publish
+        )
+        self.assertIn(
+            "AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}", publish
+        )
+        self.assertIn("ALERT_TRIGGER: ${{ github.event_name }}", publish)
+        self.assertIn(
+            "ALERT_FINGERPRINT: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}",
+            publish,
         )
         self.assertIn("python3 scripts/azure_alert_to_issue.py poll --publish", publish)
         self.assertNotIn("inputs.publish", publish)

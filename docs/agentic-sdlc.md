@@ -532,43 +532,70 @@ The poller is **disabled until explicitly configured**, and live polling is
 opted in separately from issue publication so a manual dry run can be
 validated before anything can create issues. The configuration-check job
 starts for a manual `mode=poll` dispatch only when the repository-level
-Actions variable `AZURE_ALERTS_ENABLED` is exactly `true`; a scheduled run
-additionally requires the independent repository-level variable
-`AZURE_ALERTS_PUBLISH_ENABLED` to be exactly `true`. When either is absent,
-the schedule does not check configuration, authenticate to Azure, poll, or
-publish, so an unconfigured private repository does not spend runner minutes
-on recurring checks. That configuration job uses only `contents: read` and
-does not authenticate to Azure or call GitHub's issue API. It emits a
+Actions variable `AZURE_ALERTS_ENABLED` is exactly `true`. A scheduled run
+additionally requires both `AZURE_ALERTS_SCHEDULE_ENABLED` and
+`AZURE_ALERTS_PUBLISH_ENABLED` to be exactly `true`; these independent gates
+keep publication opt-in separate from enabling recurring polling. If any
+schedule gate is absent, the schedule does not check configuration,
+authenticate to Azure, poll, or publish, so an unconfigured private
+repository does not spend runner minutes on recurring checks. A manual
+`publish=true` dispatch also requires `AZURE_ALERTS_PUBLISH_ENABLED=true` and
+an `alert_fingerprint` containing exactly 64 hexadecimal characters. The
+poller reads the full bounded alert set, then requires exactly one eligible
+alert with that fingerprint before any GitHub API read or write; an empty,
+malformed, missing, or ambiguous selection fails closed. An empty
+fingerprint on `publish=false` does not filter the read-only dry run. The
+configuration job uses only `contents: read` and does not authenticate to
+Azure or call GitHub's issue API. It emits a
 `ready`/`publish` plan; live jobs are skipped unless the `azure-alerts`
 GitHub Environment also has all required identity/scope variables. A dry run
 executes in `poll-dry-run`, which has no `issues: write` permission or GitHub
 token and never passes `--publish`. Publication executes only in
-`poll-publish`, which re-checks `AZURE_ALERTS_PUBLISH_ENABLED`, and the poller
-itself refuses `--publish` unless that variable is `true`.
+`poll-publish`, which re-checks `AZURE_ALERTS_PUBLISH_ENABLED`; the poller
+also enforces the trigger-specific publication contract.
 
-| Trigger | `AZURE_ALERTS_ENABLED` | `AZURE_ALERTS_PUBLISH_ENABLED` | Behavior |
-| --- | --- | --- | --- |
-| Manual `mode=fixture` (default) | any | any | Offline synthetic fixture; no Azure login, no GitHub writes. |
-| Manual `mode=poll`, `publish=false` | `true` | any | OIDC login and read-only dry-run poll in `poll-dry-run`; cannot create issues. |
-| Manual `mode=poll`, `publish=true` | `true` | `true` | OIDC login, poll, and deduplicated issue creation in `poll-publish`. |
-| Manual `mode=poll`, `publish=true` | `true` | absent/not `true` | Configuration job fails closed; nothing authenticates, polls, or publishes. |
-| Manual `mode=poll` | absent/not `true` | any | All live jobs skipped. |
-| Schedule | `true` | `true` | Poll and publish deduplicated issues. |
-| Schedule | not both `true` | — | All jobs skipped; no Azure login, poll, or publication. |
+| Trigger | `AZURE_ALERTS_ENABLED` | `AZURE_ALERTS_SCHEDULE_ENABLED` | `AZURE_ALERTS_PUBLISH_ENABLED` | Behavior |
+| --- | --- | --- | --- | --- |
+| Manual `mode=fixture` (default) | any | any | any | Offline synthetic fixture; no Azure login, no GitHub writes. |
+| Manual `mode=poll`, `publish=false` | `true` | any | any | OIDC login and read-only dry-run poll in `poll-dry-run`; cannot create issues. Fingerprint is not applied. |
+| Manual `mode=poll`, `publish=true`, exactly one matching fingerprint | `true` | any | `true` | OIDC login, poll all bounded scopes, and create at most the selected deduplicated issue. |
+| Manual `mode=poll`, `publish=true`, empty/malformed fingerprint | `true` | any | `true` | Configuration fails closed before Azure login, polling, or GitHub access. |
+| Manual `mode=poll`, `publish=true`, fingerprint not found or ambiguous | `true` | any | `true` | Poll fails before any GitHub issue scan, label operation, or issue creation. |
+| Manual `mode=poll`, `publish=true` | `true` | any | absent/not `true` | Configuration fails closed; nothing authenticates, polls, or publishes. |
+| Manual `mode=poll` | absent/not `true` | any | any | All live jobs skipped. |
+| Schedule | `true` | `true` | `true` | Poll and publish deduplicated issues across the bounded alert set. |
+| Schedule | not all three `true` | any | any | All scheduled jobs skipped; no Azure login, poll, or publication. |
 
 Recommended activation order: configure the `azure-alerts` identity and
 variables, set `AZURE_ALERTS_ENABLED=true`, run a manual `mode=poll`,
-`publish=false` dry run against staging and review its counts, then set
-`AZURE_ALERTS_PUBLISH_ENABLED=true` only when scheduled issue publication is
-approved. Delete or unset `AZURE_ALERTS_PUBLISH_ENABLED` to stop scheduled and
-manual publication while keeping manual dry runs available.
+`publish=false` dry run against staging and review its counts. For a bounded
+manual incident pilot, set `AZURE_ALERTS_PUBLISH_ENABLED=true` only after
+review and provide the exact alert fingerprint; leave
+`AZURE_ALERTS_SCHEDULE_ENABLED` unset so scheduled publication remains off.
+Enable the schedule gate separately only when recurring publication is
+approved. Delete or unset `AZURE_ALERTS_PUBLISH_ENABLED` to stop both manual
+and scheduled publication while keeping manual dry runs available.
 
 | Variable | Purpose |
 | --- | --- |
 | `AZURE_ALERTS_ENABLED` (repository-level Actions variable) | Explicit opt-in for manual live polling; set to `true` only after setup is reviewed. Required for every live poll. |
-| `AZURE_ALERTS_PUBLISH_ENABLED` (repository-level Actions variable) | Independent opt-in for issue publication and the two-hour schedule; leave absent until a manual dry run has been reviewed. |
+| `AZURE_ALERTS_SCHEDULE_ENABLED` (repository-level Actions variable) | Independent opt-in for the two-hour schedule; leave unset until recurring polling and publication are explicitly approved. |
+| `AZURE_ALERTS_PUBLISH_ENABLED` (repository-level Actions variable) | Independent opt-in for issue publication; manual publication also requires a valid exact fingerprint. Leave unset until a manual dry run has been reviewed. |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (in `azure-alerts`) | Non-secret Entra identity and subscription identifiers used by `azure/login` with GitHub OIDC. |
 | `AZURE_ALERT_SCOPES` (in `azure-alerts`) | Comma-separated `environment=resource-group` entries, e.g. `staging=rg-taskmanagement-staging-centralus,production=rg-taskmanagement-production-westus2`. Up to 10 scopes; only `staging`, `production`, and `shared` environments are accepted. |
+
+For manual selection, use the alert instance ID from Azure Monitor and compute
+its fingerprint exactly as the poller does: SHA-256 of the ID after trimming
+leading and trailing whitespace. For example:
+
+```sh
+python3 -c 'import hashlib; print(hashlib.sha256(input().strip().encode("utf-8")).hexdigest())'
+```
+
+Paste the resulting 64-character value into the `alert_fingerprint` dispatch
+input. It identifies one alert instance without exposing the Azure resource
+identifier. Empty selection is deliberately not an all-alert publication
+mode.
 
 Create a dedicated Entra application or user-assigned managed identity and a
 federated credential restricted to this repository and the `azure-alerts`

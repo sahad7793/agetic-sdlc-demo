@@ -17,10 +17,15 @@ on:
         default: fixture
         required: true
       publish:
-        description: Create issues from live alerts (poll mode only; also requires AZURE_ALERTS_PUBLISH_ENABLED)
+        description: Create issues from live alerts (requires AZURE_ALERTS_PUBLISH_ENABLED and an exact alert fingerprint)
         type: boolean
         default: false
         required: true
+      alert_fingerprint:
+        description: Exact 64-character alert fingerprint required when publishing (empty for dry runs)
+        type: string
+        default: ""
+        required: false
 
 permissions: {}
 
@@ -62,11 +67,13 @@ jobs:
         run: python3 scripts/azure_alert_to_issue.py poll --fixture tests/azure_alert_to_issue/fixtures/fired_alert.json
 
   configuration:
-    # Manual live polls need AZURE_ALERTS_ENABLED; scheduled runs (which always
-    # publish) additionally need the independent AZURE_ALERTS_PUBLISH_ENABLED.
+    # Manual live polls need AZURE_ALERTS_ENABLED; scheduled publication also
+    # requires independent schedule and publish opt-ins.
     if: >-
       vars.AZURE_ALERTS_ENABLED == 'true' &&
-      ((github.event_name == 'schedule' && vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true') ||
+      ((github.event_name == 'schedule' &&
+        vars.AZURE_ALERTS_SCHEDULE_ENABLED == 'true' &&
+        vars.AZURE_ALERTS_PUBLISH_ENABLED == 'true') ||
        (github.event_name == 'workflow_dispatch' && inputs.mode == 'poll'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -78,6 +85,7 @@ jobs:
       publish: ${{ steps.config.outputs.publish }}
     env:
       AZURE_ALERTS_ENABLED: ${{ vars.AZURE_ALERTS_ENABLED }}
+      AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}
       AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -85,6 +93,7 @@ jobs:
       AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
       ALERT_TRIGGER: ${{ github.event_name }}
       ALERT_PUBLISH_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+      ALERT_FINGERPRINT: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}
     steps:
       - name: Check out trusted source
         uses: actions/checkout@v7
@@ -148,8 +157,11 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_ALERTS_ENABLED: ${{ vars.AZURE_ALERTS_ENABLED }}
+      AZURE_ALERTS_SCHEDULE_ENABLED: ${{ vars.AZURE_ALERTS_SCHEDULE_ENABLED }}
       AZURE_ALERTS_PUBLISH_ENABLED: ${{ vars.AZURE_ALERTS_PUBLISH_ENABLED }}
       AZURE_ALERT_SCOPES: ${{ vars.AZURE_ALERT_SCOPES }}
+      ALERT_TRIGGER: ${{ github.event_name }}
+      ALERT_FINGERPRINT: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_fingerprint || '' }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:

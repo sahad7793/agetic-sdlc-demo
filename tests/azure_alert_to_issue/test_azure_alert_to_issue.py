@@ -66,6 +66,7 @@ class RunPlanTests(unittest.TestCase):
             "AZURE_ALERT_SCOPES": "staging=rg-taskmanagement-staging",
             "ALERT_TRIGGER": "workflow_dispatch",
             "ALERT_PUBLISH_REQUESTED": "false",
+            "ALERT_FINGERPRINT": "",
         }
         values.update(overrides)
         return {key: value for key, value in values.items() if value is not None}
@@ -75,25 +76,67 @@ class RunPlanTests(unittest.TestCase):
 
     def test_manual_publish_requires_independent_publish_opt_in(self):
         with self.assertRaisesRegex(ValueError, "publication is not explicitly enabled"):
-            alert_to_issue.run_plan(self.environment(ALERT_PUBLISH_REQUESTED="true"))
+            alert_to_issue.run_plan(self.environment(
+                ALERT_PUBLISH_REQUESTED="true",
+                ALERT_FINGERPRINT="a" * 64,
+            ))
         self.assertEqual(
             alert_to_issue.run_plan(self.environment(
-                ALERT_PUBLISH_REQUESTED="true", AZURE_ALERTS_PUBLISH_ENABLED="true"
+                ALERT_PUBLISH_REQUESTED="true",
+                AZURE_ALERTS_PUBLISH_ENABLED="true",
+                ALERT_FINGERPRINT="a" * 64,
             )),
             (True, True),
         )
 
+    def test_manual_publish_requires_valid_64_hex_fingerprint(self):
+        for value in ("", "a" * 63, "g" * 64, "a" * 65):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "fingerprint"):
+                    alert_to_issue.run_plan(self.environment(
+                        ALERT_PUBLISH_REQUESTED="true",
+                        AZURE_ALERTS_PUBLISH_ENABLED="true",
+                        ALERT_FINGERPRINT=value,
+                    ))
+        self.assertEqual(
+            alert_to_issue.run_plan(self.environment(
+                ALERT_PUBLISH_REQUESTED="true",
+                AZURE_ALERTS_PUBLISH_ENABLED="true",
+                ALERT_FINGERPRINT="A" * 64,
+            )),
+            (True, True),
+        )
+
+    def test_manual_dry_run_does_not_require_or_apply_fingerprint(self):
+        self.assertEqual(alert_to_issue.run_plan(self.environment(
+            ALERT_FINGERPRINT="not-a-fingerprint",
+        )), (True, False))
+
+    def test_empty_fingerprint_fails_closed_for_manual_publish(self):
+        with self.assertRaisesRegex(ValueError, "requires an alert fingerprint"):
+            alert_to_issue.run_plan(self.environment(
+                ALERT_PUBLISH_REQUESTED="true",
+                AZURE_ALERTS_PUBLISH_ENABLED="true",
+            ))
+
     def test_schedule_is_skipped_without_publish_opt_in(self):
-        for value in (None, "", "false", "yes"):
+        for schedule_value, publish_value in (
+            (None, "true"), ("", "true"), ("false", "true"), ("true", None),
+            ("true", ""), ("true", "false"), ("true", "yes"),
+        ):
             self.assertEqual(
                 alert_to_issue.run_plan(self.environment(
-                    ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED=value
+                    ALERT_TRIGGER="schedule",
+                    AZURE_ALERTS_SCHEDULE_ENABLED=schedule_value,
+                    AZURE_ALERTS_PUBLISH_ENABLED=publish_value,
                 )),
                 (False, False),
             )
         self.assertEqual(
             alert_to_issue.run_plan(self.environment(
-                ALERT_TRIGGER="schedule", AZURE_ALERTS_PUBLISH_ENABLED="true"
+                ALERT_TRIGGER="schedule",
+                AZURE_ALERTS_SCHEDULE_ENABLED="true",
+                AZURE_ALERTS_PUBLISH_ENABLED="true",
             )),
             (True, True),
         )
@@ -119,6 +162,19 @@ class RunPlanTests(unittest.TestCase):
 
     def test_publish_poll_refuses_without_publish_opt_in(self):
         with patch.dict(alert_to_issue.os.environ, self.environment(), clear=True), \
+                patch.object(alert_to_issue.sys, "argv", ["poller", "poll", "--publish"]), \
+                patch.object(alert_to_issue, "AzureCli") as azure_cli, \
+                patch.object(alert_to_issue, "process") as process:
+            self.assertEqual(alert_to_issue.main(), 1)
+        azure_cli.assert_not_called()
+        process.assert_not_called()
+
+    def test_manual_publish_with_missing_fingerprint_fails_before_polling(self):
+        environment = self.environment(
+            ALERT_PUBLISH_REQUESTED="true",
+            AZURE_ALERTS_PUBLISH_ENABLED="true",
+        )
+        with patch.dict(alert_to_issue.os.environ, environment, clear=True), \
                 patch.object(alert_to_issue.sys, "argv", ["poller", "poll", "--publish"]), \
                 patch.object(alert_to_issue, "AzureCli") as azure_cli, \
                 patch.object(alert_to_issue, "process") as process:
@@ -253,6 +309,12 @@ class CollectionTests(unittest.TestCase):
 
 
 class DeduplicationTests(unittest.TestCase):
+    def alert_with_id(self, alert_id):
+        item = json.loads(json.dumps(fixture_items()[0]))
+        item["id"] = alert_id
+        item["properties"]["essentials"]["alertId"] = alert_id
+        return item
+
     def test_publish_skips_existing_fingerprint_and_creates_only_once(self):
         alerts = [(fixture_items()[0], "staging", "fixture")]
         mapped = alert_to_issue.map_alert(fixture_items()[0], "staging", "fixture")
@@ -275,6 +337,60 @@ class DeduplicationTests(unittest.TestCase):
         self.assertEqual(counts["created"], 1)
         self.assertEqual(counts["duplicates"], 1)
         self.assertEqual(command.call_count, 2)
+
+    def test_selected_publish_creates_only_exact_fingerprint_match(self):
+        first = self.alert_with_id("/subscriptions/a/alerts/first")
+        second = self.alert_with_id("/subscriptions/a/alerts/second")
+        selected = alert_to_issue.fingerprint(second["id"])
+        alerts = [(first, "staging", "fixture"), (second, "staging", "fixture")]
+        with patch.object(alert_to_issue, "existing_fingerprints", return_value=set()), \
+                patch.object(alert_to_issue, "file_issue") as file_issue:
+            counts = alert_to_issue.process(
+                alerts, publish=True, now=NOW, selected_fingerprint=selected
+            )
+        self.assertEqual(counts["created"], 1)
+        self.assertEqual(counts["fired"], 2)
+        self.assertEqual(
+            file_issue.call_args.args[0]["fingerprint"], selected
+        )
+
+    def test_selected_publish_fails_when_fingerprint_is_not_found(self):
+        alerts = [(fixture_items()[0], "staging", "fixture")]
+        with patch.object(alert_to_issue, "existing_fingerprints") as existing, \
+                patch.object(alert_to_issue, "file_issue") as file_issue:
+            with self.assertRaisesRegex(ValueError, "was not found"):
+                alert_to_issue.process(
+                    alerts, publish=True, now=NOW,
+                    selected_fingerprint="0" * 64,
+                )
+        existing.assert_not_called()
+        file_issue.assert_not_called()
+
+    def test_selected_publish_fails_when_fingerprint_is_ambiguous(self):
+        alert = fixture_items()[0]
+        alerts = [
+            (alert, "staging", "rg-one"),
+            (alert, "staging", "rg-two"),
+        ]
+        selected = alert_to_issue.fingerprint(alert["id"])
+        with patch.object(alert_to_issue, "existing_fingerprints") as existing, \
+                patch.object(alert_to_issue, "file_issue") as file_issue:
+            with self.assertRaisesRegex(ValueError, "multiple eligible alerts"):
+                alert_to_issue.process(
+                    alerts, publish=True, now=NOW,
+                    selected_fingerprint=selected,
+                )
+        existing.assert_not_called()
+        file_issue.assert_not_called()
+
+    def test_empty_fingerprint_keeps_dry_run_polling_all_eligible_alerts(self):
+        alerts = [(item, "staging", "fixture") for item in fixture_items()]
+        counts = alert_to_issue.process(
+            alerts, now=NOW, enforce_freshness=False
+        )
+        self.assertEqual(counts["observed"], 2)
+        self.assertEqual(counts["fired"], 1)
+        self.assertEqual(counts["created"], 0)
 
     def test_issue_scan_fails_closed_at_limit(self):
         payload = json.dumps([{"body": ""}] * alert_to_issue.MAX_EXISTING_ISSUES)
