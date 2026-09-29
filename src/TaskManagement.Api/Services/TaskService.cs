@@ -8,11 +8,12 @@ public class TaskService(ITaskRepository repository, ILogger<TaskService> logger
 {
     public async Task<IReadOnlyList<TaskResponse>> GetAllAsync(
         TaskItemStatus? status,
+        TaskPriority? priority,
         DateTime? dueBefore,
         DateTime? dueAfter,
         CancellationToken cancellationToken)
     {
-        var tasks = await repository.GetAllAsync(status, dueBefore, dueAfter, cancellationToken);
+        var tasks = await repository.GetAllAsync(status, priority, dueBefore, dueAfter, cancellationToken);
         return tasks.Select(Map).ToList();
     }
 

@@ -6,6 +6,7 @@ public interface ITaskRepository
 {
     Task<IReadOnlyList<TaskItem>> GetAllAsync(
         TaskItemStatus? status,
+        TaskPriority? priority,
         DateTime? dueBefore,
         DateTime? dueAfter,
         CancellationToken cancellationToken);

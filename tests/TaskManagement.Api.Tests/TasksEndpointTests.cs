@@ -224,6 +224,74 @@ public class TasksEndpointTests(TaskApiFactory factory) : IClassFixture<TaskApiF
     }
 
     [Fact]
+    public async Task GetAll_WithPriorityFilter_CombinesFiltersAndRejectsInvalidValues()
+    {
+        var highPriorityTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "High priority in progress",
+            Status = TaskItemStatus.InProgress,
+            Priority = TaskPriority.High,
+            DueDate = new DateTime(2220, 6, 1),
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediumPriorityTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "Medium priority todo",
+            Status = TaskItemStatus.Todo,
+            Priority = TaskPriority.Medium,
+            DueDate = new DateTime(2220, 6, 2),
+            CreatedAt = DateTime.UtcNow.AddMinutes(-1)
+        };
+        var lowPriorityTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "Low priority in progress",
+            Status = TaskItemStatus.InProgress,
+            Priority = TaskPriority.Low,
+            DueDate = new DateTime(2220, 6, 3),
+            CreatedAt = DateTime.UtcNow.AddMinutes(-2)
+        };
+        await SeedTasksAsync(highPriorityTask, mediumPriorityTask, lowPriorityTask);
+
+        var client = factory.CreateClient();
+        var allResponse = await client.GetAsync("/api/tasks");
+        var allTasks = await allResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var highResponse = await client.GetAsync("/api/tasks?priority=High");
+        var highTasks = await highResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var mediumResponse = await client.GetAsync("/api/tasks?priority=Medium");
+        var mediumTasks = await mediumResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var lowResponse = await client.GetAsync("/api/tasks?priority=low");
+        var lowTasks = await lowResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var combinedResponse = await client.GetAsync(
+            "/api/tasks?status=InProgress&priority=High&dueAfter=2220-01-01T00:00:00Z&dueBefore=2221-01-01T00:00:00Z");
+        var combinedTasks = await combinedResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+        var noMatchesResponse = await client.GetAsync("/api/tasks?status=Done&priority=Low");
+        var noMatchesTasks = await noMatchesResponse.Content.ReadFromJsonAsync<IReadOnlyList<TaskResponse>>();
+
+        allResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        allTasks!.Select(task => task.Id).Should().Contain(
+            [highPriorityTask.Id, mediumPriorityTask.Id, lowPriorityTask.Id]);
+        highTasks!.Select(task => task.Id).Should().Contain(highPriorityTask.Id)
+            .And.NotContain([mediumPriorityTask.Id, lowPriorityTask.Id]);
+        mediumTasks!.Select(task => task.Id).Should().Contain(mediumPriorityTask.Id)
+            .And.NotContain([highPriorityTask.Id, lowPriorityTask.Id]);
+        lowTasks!.Select(task => task.Id).Should().Contain(lowPriorityTask.Id)
+            .And.NotContain([highPriorityTask.Id, mediumPriorityTask.Id]);
+        combinedResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        combinedTasks!.Select(task => task.Id).Should().ContainSingle().Which.Should().Be(highPriorityTask.Id);
+        noMatchesResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        noMatchesTasks.Should().BeEmpty();
+
+        (await client.GetAsync("/api/tasks?priority=Urgent")).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await client.GetAsync("/api/tasks?priority=99")).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await client.GetAsync("/api/tasks?priority=1")).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await client.GetAsync("/api/tasks?priority=")).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await client.GetAsync("/api/tasks?priority=Low&priority=High")).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task GetAll_WithMalformedDueDate_ReturnsBadRequest()
     {
         var client = factory.CreateClient();

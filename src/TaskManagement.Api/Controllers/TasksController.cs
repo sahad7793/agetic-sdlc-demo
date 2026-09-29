@@ -11,13 +11,27 @@ public class TasksController(ITaskService service, ILogger<TasksController> logg
 {
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<TaskResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<IReadOnlyList<TaskResponse>>> GetAll(
         [FromQuery] TaskItemStatus? status,
+        [FromQuery] TaskPriority? priority,
         [FromQuery] DateTime? dueBefore,
         [FromQuery] DateTime? dueAfter,
         CancellationToken cancellationToken)
     {
-        return Ok(await service.GetAllAsync(status, dueBefore, dueAfter, cancellationToken));
+        var priorityValues = Request.Query["priority"];
+        if (Request.Query.ContainsKey("priority") &&
+            (priority is null ||
+             !Enum.IsDefined(priority.Value) ||
+             priorityValues.Count != 1 ||
+             int.TryParse(priorityValues[0], System.Globalization.NumberStyles.Integer,
+                 System.Globalization.CultureInfo.InvariantCulture, out _)))
+        {
+            ModelState.AddModelError("priority", "Priority must be one of: Low, Medium, High.");
+            return ValidationProblem(ModelState);
+        }
+
+        return Ok(await service.GetAllAsync(status, priority, dueBefore, dueAfter, cancellationToken));
     }
 
     [HttpGet("overdue")]

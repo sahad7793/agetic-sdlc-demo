@@ -7,6 +7,7 @@ public interface ITaskService
 {
     Task<IReadOnlyList<TaskResponse>> GetAllAsync(
         TaskItemStatus? status,
+        TaskPriority? priority,
         DateTime? dueBefore,
         DateTime? dueAfter,
         CancellationToken cancellationToken);
