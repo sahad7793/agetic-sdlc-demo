@@ -84,21 +84,52 @@ def require_publishing_enabled(environ):
             "Azure alert issue publication is not explicitly enabled.")
 
 
+def schedule_enabled(environ):
+    return environ.get("AZURE_ALERTS_SCHEDULE_ENABLED", "").lower() == "true"
+
+
+def validate_fingerprint_target(value):
+    """Validate a 64-character hex string for manual alert targeting."""
+    if value is None or value == "":
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    require(bool(re.fullmatch(r"[0-9a-f]{64}", value, re.IGNORECASE)),
+            "Alert fingerprint must be exactly 64 hexadecimal characters.")
+    return value.lower()
+
+
 def run_plan(environ):
-    """Return (ready, publish) for a live poll; fail closed on unsafe requests."""
+    """Return (ready, publish, fingerprint) for a live poll; fail closed on unsafe requests."""
     trigger = environ.get("ALERT_TRIGGER", "")
     require(trigger in {"schedule", "workflow_dispatch"},
             "Live alert polling only runs from a schedule or manual dispatch.")
     try:
         validate_configuration(environ)
     except ValueError:
-        return False, False
+        return False, False, None
+    
     if trigger == "schedule":
-        return publishing_enabled(environ), publishing_enabled(environ)
+        # Scheduled runs: support both legacy AZURE_ALERTS_PUBLISH_ENABLED and new AZURE_ALERTS_SCHEDULE_ENABLED
+        # Require at least one to be true for publication
+        publish = publishing_enabled(environ) or schedule_enabled(environ)
+        return publish, publish, None
+    
+    # Manual dispatch (workflow_dispatch)
     publish_requested = environ.get("ALERT_PUBLISH_REQUESTED", "").lower() == "true"
+    fingerprint_target = None
+    
     if publish_requested:
         require_publishing_enabled(environ)
-    return True, publish_requested
+        # For manual publish, fingerprint is required to ensure bounded operation
+        fingerprint_target = validate_fingerprint_target(
+            environ.get("ALERT_FINGERPRINT_TARGET", "")
+        )
+        require(fingerprint_target is not None,
+                "Manual alert publishing requires a target alert fingerprint (64-hex).")
+    
+    return True, publish_requested, fingerprint_target
 
 
 def fingerprint(alert_id):
@@ -339,7 +370,7 @@ def file_issue(alert):
             body_path.unlink(missing_ok=True)
 
 
-def process(alerts, publish=False, azure=None, subscription_id=None, scopes=None,
+def process(alerts, publish=False, fingerprint_target=None, azure=None, subscription_id=None, scopes=None,
             now=None, enforce_freshness=True):
     now = now or datetime.now(timezone.utc)
     if azure is not None:
@@ -359,6 +390,15 @@ def process(alerts, publish=False, azure=None, subscription_id=None, scopes=None
         normalized.append(alert)
     require(len(normalized) <= MAX_ALERTS_PER_RUN,
             "Alert collection exceeded the per-run limit; no issues were created.")
+
+    # Filter by fingerprint if manual targeting is enabled
+    if fingerprint_target is not None:
+        filtered = [alert for alert in normalized if alert["fingerprint"] == fingerprint_target]
+        require(len(filtered) <= 1,
+                "Multiple alerts matched the target fingerprint; operation failed to prevent ambiguous publication.")
+        require(len(filtered) == 1,
+                f"No alert matched the target fingerprint {fingerprint_target}; no issue was created.")
+        normalized = filtered
 
     if not publish:
         return {"observed": len(raw_alerts), "fired": len(normalized),
@@ -381,14 +421,19 @@ def process(alerts, publish=False, azure=None, subscription_id=None, scopes=None
 
 
 def write_configuration(output_path, environ):
-    ready, publish = run_plan(environ)
+    ready, publish, fingerprint_target = run_plan(environ)
     with output_path.open("a", encoding="utf-8") as output:
         output.write(f"ready={'true' if ready else 'false'}\n")
         output.write(f"publish={'true' if publish else 'false'}\n")
+        if fingerprint_target:
+            output.write(f"fingerprint={fingerprint_target}\n")
     if not ready:
         print("Azure alert polling is disabled or missing required environment configuration.")
     elif publish:
-        print("Azure alert polling configuration is present; issue publication is enabled.")
+        if fingerprint_target:
+            print(f"Azure alert polling configuration is present; manual publication enabled for fingerprint {fingerprint_target[:12]}...")
+        else:
+            print("Azure alert polling configuration is present; scheduled publication is enabled.")
     else:
         print("Azure alert polling configuration is present; this run is a dry run.")
     return 0
@@ -402,24 +447,30 @@ def main():
     poll_parser = subparsers.add_parser("poll", help="Poll alerts or inspect a local fixture")
     poll_parser.add_argument("--fixture", type=Path, help="Local fixture; never reads Azure or writes GitHub")
     poll_parser.add_argument("--publish", action="store_true", help="Create deduplicated GitHub issues")
+    poll_parser.add_argument("--fingerprint", type=str, help="Target specific alert by 64-hex fingerprint (manual publish only)")
     args = parser.parse_args()
     try:
         if args.command == "configuration":
             return write_configuration(args.output, os.environ)
         require(not (args.fixture and args.publish),
                 "A local fixture can never be used to publish an issue.")
+        
+        fingerprint_target = args.fingerprint or os.environ.get("ALERT_FINGERPRINT_TARGET", "")
+        if fingerprint_target:
+            fingerprint_target = validate_fingerprint_target(fingerprint_target)
+        
         if args.fixture:
             payload = json.loads(args.fixture.read_text(encoding="utf-8"))
             items, _ = response_items(payload)
             alerts = [(item, "staging", "synthetic-fixture") for item in items]
-            counts = process(alerts, enforce_freshness=False)
+            counts = process(alerts, fingerprint_target=fingerprint_target, enforce_freshness=False)
         else:
             subscription_id, scopes = validate_configuration(os.environ)
             if args.publish:
                 require_publishing_enabled(os.environ)
             counts = process(
-                None, publish=args.publish, azure=AzureCli(),
-                subscription_id=subscription_id, scopes=scopes,
+                None, publish=args.publish, fingerprint_target=fingerprint_target,
+                azure=AzureCli(), subscription_id=subscription_id, scopes=scopes,
             )
         print(
             "Azure alert poll completed: "
