@@ -499,6 +499,37 @@ to reproduce the actual CI comparison. Do not auto-refresh the base snapshot
 or treat the advisory report as permission to merge: humans assess intended
 compatibility changes and approve the PR.
 
+## EF Core migration safety
+
+`.github/workflows/migration-safety.yml` runs on pull requests to `main` that
+change EF Core migrations, the `TaskManagementDbContext`, domain models, EF
+tool configuration, or the workflow and its focused tests. It checks whether
+the current model has changes not represented in the committed snapshot, scans
+new migration `Up` methods for potentially destructive operations, and
+generates an idempotent SQL script from the latest migration on the trusted PR
+base through the newest migration added by the PR. The report and SQL are
+uploaded as a 14-day artifact; the report is also added to the job summary.
+
+The workflow uses only `contents: read` permissions and SHA-pinned GitHub
+Actions. It has no secrets and uses an `IDesignTimeDbContextFactory` configured
+for SQL Server with an unreachable loopback placeholder; EF design-time
+commands do not open a database connection or boot the application. It never
+connects to a real environment. The
+`dotnet-ef` local tool is pinned to 9.0.20, matching the API's EF Core packages.
+A detected pending model change or potentially destructive migration operation
+is advisory and does not fail the job. Restore, design-time, snapshot-check, or
+SQL-generation errors fail visibly. No branch protection or required-check
+setting is changed.
+
+The scanner covers `DropColumn`, `DropTable`, `RenameColumn`, `RenameTable`,
+`AlterColumn`, and `DropIndex` calls in newly added migration `Up` methods.
+`AlterColumn` and `DropIndex` are reported conservatively because their impact
+depends on the provider and schema. Static analysis can miss raw SQL or custom
+migration code and cannot establish data-loss impact; review the migration and
+generated script before approval. Modified historical migration files are
+not analyzed as newly added files. The check is a review aid, not a substitute
+for human assessment or production migration planning.
+
 ## Performance and load-testing gate
 
 There was no performance signal anywhere in the pipeline before this change:

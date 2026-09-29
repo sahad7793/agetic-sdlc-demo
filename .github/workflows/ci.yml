@@ -46,6 +46,9 @@ jobs:
       - name: Test performance-gate contracts
         run: python3 -m unittest discover -s tests/perf_gate
 
+      - name: Test EF migration-safety contracts
+        run: python3 -m unittest discover -s tests/migration_safety
+
       - name: Test issue-link check
         run: python3 -m unittest discover -s tests/issue_link
 
