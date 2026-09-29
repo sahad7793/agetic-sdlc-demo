@@ -7,7 +7,7 @@ This repository uses agents to accelerate implementation and review, while peopl
 1. File a feature or bug using the structured issue forms. Include measurable acceptance criteria and the affected area.
 2. A maintainer reviews, clarifies, and approves the issue before implementation begins.
 3. Assign the approved issue to GitHub Copilot coding agent, or select **Open in Copilot** from the issue. The agent (or a human) works in an isolated branch and opens a pull request that links the issue.
-4. CI runs restore, build, tests with coverage collection, and CodeQL analysis. Dependabot opens weekly update PRs for NuGet packages and GitHub Actions.
+4. CI runs restore, build, tests with coverage collection, and CodeQL analysis. Relevant API pull requests also get an advisory OpenAPI change report. Dependabot opens weekly update PRs for NuGet packages and GitHub Actions.
 5. A human reviewer uses the PR template, code review, test results, and any advisory agent review to check architecture, validation, business rules, and regression coverage.
 6. After required CI checks are green and a human approval is present, a human merges the PR. Agents never approve or merge pull requests by themselves.
 
@@ -424,6 +424,55 @@ production" — the assignee and checklist are the auditable record of who is
 responding and when, based on what the operator reports. Treat the SLA table
 as policy, and the alert-context fields as exactly what was typed in — verify
 independently before acting on them for anything safety-critical.
+
+## OpenAPI contract change reporting
+
+`.github/workflows/openapi-diff.yml` runs on pull requests to `main` that
+change the API, baseline, comparison script/tests, workflow, or .NET SDK pin.
+It builds the existing .NET 8 API, starts it locally in Development using an
+isolated temporary SQLite database, and captures `/swagger/v1/swagger.json`.
+Swagger remains Development-only; no production endpoint or API behavior is
+changed. The captured document and markdown report are uploaded as a
+short-lived workflow artifact, with the report also appended to the job
+summary.
+
+The reviewed `docs/openapi/task-management-v1.json` snapshot is the OpenAPI 3
+baseline. CI compares the candidate contract with the **snapshot from the PR
+base commit**, rather than trusting an edited snapshot in the PR. This makes
+breaking changes visible even when a contributor updates the snapshot in the
+same PR. On the initial adoption PR, whose base commit lacks a snapshot, the
+job explicitly marks the comparison as bootstrap and uses the PR snapshot;
+the reviewer must inspect the full baseline. A mismatched candidate and PR
+snapshot is called out in the report.
+
+The workflow downloads oasdiff v1.32.1 for Linux amd64 with a fixed SHA-256
+checksum and runs its `breaking` and `changelog` analyses with external refs
+disabled. The report distinguishes breaking/potentially breaking contract
+changes from other consumer-facing changes. It does **not** compare
+documentation-only changes or guarantee runtime semantics: the accuracy of
+the finding depends on controller/DTO Swagger metadata. Reviewers should
+also check the actual code, status codes, and validation behavior. A failed
+build, capture, download, checksum, or comparison fails the job visibly;
+**detected breaking changes are advisory and never fail it**. The owner chose
+this policy; no branch rule or required-check setting is changed.
+
+To update the snapshot, run the commands in [README](../README.md#openapi-change-report)
+from a clean .NET 8 build, inspect the generated diff, and commit it in the
+same reviewed PR as the contract change. For a local comparison, install the
+same verified oasdiff version and run:
+
+```bash
+python3 scripts/openapi_diff.py compare \
+  --baseline docs/openapi/task-management-v1.json \
+  --current /path/to/current.json \
+  --oasdiff /path/to/oasdiff \
+  --report /path/to/report.md
+```
+
+On PRs use `--base-revision <full-base-commit-sha>` instead of `--baseline`
+to reproduce the actual CI comparison. Do not auto-refresh the base snapshot
+or treat the advisory report as permission to merge: humans assess intended
+compatibility changes and approve the PR.
 
 ## Performance and load-testing gate
 
