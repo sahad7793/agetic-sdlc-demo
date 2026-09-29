@@ -24,6 +24,22 @@ See the [agent security policy](agent-security-policy.md) for safeguards
 against prompt injection and for the boundaries on permissions, secrets, and
 human approvals.
 
+### Advisory AI pull-request review
+
+Use GitHub's native Copilot code review as the repository's optional
+AI-assisted PR review path. Automatic review can be enabled in a user's
+Copilot settings or centrally through applicable repository or organization
+rulesets. That configuration is external to this repository and depends on
+Copilot availability for the account. Depending on the configuration, reviews
+can include new pushes and draft PRs.
+
+Copilot's findings are advisory: the human reviewer verifies them alongside
+CI results and repository requirements. They do not replace the required
+human approval, and they do not authorize an agent to approve, merge, or
+deploy. The [`reviewer` profile](../.github/agents/reviewer.agent.md) remains
+available for a human-directed review session; it is not an automatic
+GitHub Actions workflow.
+
 ## Agent roster
 
 | Lifecycle stage | Agent | Human gate |
@@ -31,7 +47,7 @@ human approvals.
 | Issue intake and requirements | [`product-analyst`](../.github/agents/product-analyst.agent.md) | Maintainer approves scope and acceptance criteria before implementation. |
 | Solution design | [`plan-agent`](../.github/workflows/plan-agent.md), following the [`architect`](../.github/agents/architect.agent.md) profile | Human reviewer accepts or rejects the design and any Proposed ADR before implementation. |
 | Implementation verification | [`test-engineer`](../.github/agents/test-engineer.agent.md) | Human author/reviewer verifies test intent and CI results. |
-| Pull request review | [`reviewer`](../.github/agents/reviewer.agent.md) | Human reviewer decides findings and provides required approval; agents never approve or merge. |
+| Pull request review | Native Copilot code review (when enabled) and [`reviewer`](../.github/agents/reviewer.agent.md) | Human reviewer validates findings and provides required approval; agents never approve or merge. |
 | Security review | [`security-review`](../.github/workflows/security-review.md), using the [`security-reviewer`](../.github/agents/security-reviewer.agent.md) profile | The advisory review covers only configured PR paths and the reviewed revision; maintainers assess findings and approve any security-sensitive remediation. No finding is not assurance; agents never approve or merge. |
 | Release preparation | [`release-manager`](../.github/agents/release-manager.agent.md) | Human verifies drafts and separately authorizes any publication. |
 | Incident response | [`ops-investigator`](../.github/agents/ops-investigator.agent.md) | Incident commander decides commands, rollback, and any production action. |
