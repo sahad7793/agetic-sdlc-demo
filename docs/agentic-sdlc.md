@@ -528,18 +528,45 @@ output are never written to workflow logs. Severity mapping is fixed: Azure
 `Sev3 - Moderate`, and `Sev3`/`Sev4` → `Sev4 - Low`. Unknown severity,
 malformed timestamps, and resolved alerts are skipped.
 
-The poller is **disabled until explicitly configured**. The scheduled
-configuration-check job does not start unless the repository-level Actions
-variable `AZURE_ALERTS_ENABLED` is exactly `true`, so an unconfigured private
-repository does not spend runner minutes on recurring checks. That
-configuration job uses only `contents: read` and does not authenticate to
-Azure or call GitHub's issue API. The poll job is skipped unless the
-`azure-alerts` GitHub Environment also has all required identity/scope
-variables:
+The poller is **disabled until explicitly configured**, and live polling is
+opted in separately from issue publication so a manual dry run can be
+validated before anything can create issues. The configuration-check job
+starts for a manual `mode=poll` dispatch only when the repository-level
+Actions variable `AZURE_ALERTS_ENABLED` is exactly `true`; a scheduled run
+additionally requires the independent repository-level variable
+`AZURE_ALERTS_PUBLISH_ENABLED` to be exactly `true`. When either is absent,
+the schedule does not check configuration, authenticate to Azure, poll, or
+publish, so an unconfigured private repository does not spend runner minutes
+on recurring checks. That configuration job uses only `contents: read` and
+does not authenticate to Azure or call GitHub's issue API. It emits a
+`ready`/`publish` plan; live jobs are skipped unless the `azure-alerts`
+GitHub Environment also has all required identity/scope variables. A dry run
+executes in `poll-dry-run`, which has no `issues: write` permission or GitHub
+token and never passes `--publish`. Publication executes only in
+`poll-publish`, which re-checks `AZURE_ALERTS_PUBLISH_ENABLED`, and the poller
+itself refuses `--publish` unless that variable is `true`.
+
+| Trigger | `AZURE_ALERTS_ENABLED` | `AZURE_ALERTS_PUBLISH_ENABLED` | Behavior |
+| --- | --- | --- | --- |
+| Manual `mode=fixture` (default) | any | any | Offline synthetic fixture; no Azure login, no GitHub writes. |
+| Manual `mode=poll`, `publish=false` | `true` | any | OIDC login and read-only dry-run poll in `poll-dry-run`; cannot create issues. |
+| Manual `mode=poll`, `publish=true` | `true` | `true` | OIDC login, poll, and deduplicated issue creation in `poll-publish`. |
+| Manual `mode=poll`, `publish=true` | `true` | absent/not `true` | Configuration job fails closed; nothing authenticates, polls, or publishes. |
+| Manual `mode=poll` | absent/not `true` | any | All live jobs skipped. |
+| Schedule | `true` | `true` | Poll and publish deduplicated issues. |
+| Schedule | not both `true` | — | All jobs skipped; no Azure login, poll, or publication. |
+
+Recommended activation order: configure the `azure-alerts` identity and
+variables, set `AZURE_ALERTS_ENABLED=true`, run a manual `mode=poll`,
+`publish=false` dry run against staging and review its counts, then set
+`AZURE_ALERTS_PUBLISH_ENABLED=true` only when scheduled issue publication is
+approved. Delete or unset `AZURE_ALERTS_PUBLISH_ENABLED` to stop scheduled and
+manual publication while keeping manual dry runs available.
 
 | Variable | Purpose |
 | --- | --- |
-| `AZURE_ALERTS_ENABLED` (repository-level Actions variable) | Explicit opt-in switch; set to `true` only after setup is reviewed. |
+| `AZURE_ALERTS_ENABLED` (repository-level Actions variable) | Explicit opt-in for manual live polling; set to `true` only after setup is reviewed. Required for every live poll. |
+| `AZURE_ALERTS_PUBLISH_ENABLED` (repository-level Actions variable) | Independent opt-in for issue publication and the two-hour schedule; leave absent until a manual dry run has been reviewed. |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (in `azure-alerts`) | Non-secret Entra identity and subscription identifiers used by `azure/login` with GitHub OIDC. |
 | `AZURE_ALERT_SCOPES` (in `azure-alerts`) | Comma-separated `environment=resource-group` entries, e.g. `staging=rg-taskmanagement-staging-centralus,production=rg-taskmanagement-production-westus2`. Up to 10 scopes; only `staging`, `production`, and `shared` environments are accepted. |
 
@@ -558,12 +585,14 @@ enabling the poller.
 
 GitHub permissions are empty at workflow scope. The offline fixture and
 configuration-check jobs get `contents: read` only; the live poll job gets
-`contents: read`, `id-token: write`, and `issues: write` only. The existing
+`contents: read`, `id-token: write`, and `issues: write` only in the
+publishing job; the dry-run poll job gets `contents: read` and
+`id-token: write` only. The existing
 `incident` and `sev1`–`sev4` labels are reused (and created only if missing,
-following the manual incident workflow's convention). Scheduled runs publish issues after
-Azure setup is enabled. Manual dispatch defaults to a synthetic fixture that
+following the manual incident workflow's convention). Scheduled runs publish issues only
+after both opt-in variables are enabled. Manual dispatch defaults to a synthetic fixture that
 does not authenticate to Azure or write to GitHub; live poll dispatches are
-dry-run unless `publish` is explicitly selected. The fixture is test data,
+dry-run unless `publish` is explicitly selected and publication is enabled. The fixture is test data,
 not a fabricated live alert. This automation does not acknowledge/close an
 Azure alert, page responders, or trigger rollback/remediation.
 

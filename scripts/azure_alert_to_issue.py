@@ -75,6 +75,32 @@ def validate_configuration(environ):
     return subscription_id, parse_scopes(environ.get("AZURE_ALERT_SCOPES", ""))
 
 
+def publishing_enabled(environ):
+    return environ.get("AZURE_ALERTS_PUBLISH_ENABLED", "").lower() == "true"
+
+
+def require_publishing_enabled(environ):
+    require(publishing_enabled(environ),
+            "Azure alert issue publication is not explicitly enabled.")
+
+
+def run_plan(environ):
+    """Return (ready, publish) for a live poll; fail closed on unsafe requests."""
+    trigger = environ.get("ALERT_TRIGGER", "")
+    require(trigger in {"schedule", "workflow_dispatch"},
+            "Live alert polling only runs from a schedule or manual dispatch.")
+    try:
+        validate_configuration(environ)
+    except ValueError:
+        return False, False
+    if trigger == "schedule":
+        return publishing_enabled(environ), publishing_enabled(environ)
+    publish_requested = environ.get("ALERT_PUBLISH_REQUESTED", "").lower() == "true"
+    if publish_requested:
+        require_publishing_enabled(environ)
+    return True, publish_requested
+
+
 def fingerprint(alert_id):
     require(isinstance(alert_id, str) and 0 < len(alert_id) <= 4096,
             "Alert is missing a valid identity.")
@@ -355,17 +381,16 @@ def process(alerts, publish=False, azure=None, subscription_id=None, scopes=None
 
 
 def write_configuration(output_path, environ):
-    ready = True
-    try:
-        validate_configuration(environ)
-    except ValueError:
-        ready = False
+    ready, publish = run_plan(environ)
     with output_path.open("a", encoding="utf-8") as output:
         output.write(f"ready={'true' if ready else 'false'}\n")
+        output.write(f"publish={'true' if publish else 'false'}\n")
     if not ready:
         print("Azure alert polling is disabled or missing required environment configuration.")
+    elif publish:
+        print("Azure alert polling configuration is present; issue publication is enabled.")
     else:
-        print("Azure alert polling configuration is present.")
+        print("Azure alert polling configuration is present; this run is a dry run.")
     return 0
 
 
@@ -390,6 +415,8 @@ def main():
             counts = process(alerts, enforce_freshness=False)
         else:
             subscription_id, scopes = validate_configuration(os.environ)
+            if args.publish:
+                require_publishing_enabled(os.environ)
             counts = process(
                 None, publish=args.publish, azure=AzureCli(),
                 subscription_id=subscription_id, scopes=scopes,
