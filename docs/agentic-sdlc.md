@@ -7,8 +7,8 @@ This repository uses agents to accelerate implementation and review, while peopl
 1. File a feature or bug using the structured issue forms. Include measurable acceptance criteria and the affected area.
 2. A maintainer reviews, clarifies, and approves the issue before implementation begins.
 3. Assign the approved issue to GitHub Copilot coding agent, or select **Open in Copilot** from the issue. The agent (or a human) works in an isolated branch and opens a pull request that links the issue.
-4. CI runs restore, build, tests with coverage collection, and CodeQL analysis. Relevant API pull requests also get an advisory OpenAPI change report. Dependabot opens weekly update PRs for NuGet packages and GitHub Actions.
-5. A human reviewer uses the PR template, code review, test results, and any advisory agent review to check architecture, validation, business rules, and regression coverage.
+4. CI runs restore, build, tests with coverage collection, and CodeQL analysis. Relevant API pull requests get an advisory OpenAPI change report; relevant same-repository pull requests also get a bounded advisory security-review comment. Neither advisory replaces CodeQL or blocks a pull request. Dependabot opens weekly update PRs for NuGet packages and GitHub Actions.
+5. A human reviewer uses the PR template, code review, test results, and advisory reports to check architecture, validation, business rules, and regression coverage. A security review with no concrete findings is not proof of safety.
 6. After required CI checks are green and a human approval is present, a human merges the PR. Agents never approve or merge pull requests by themselves.
 
 ### Test coverage reporting
@@ -32,7 +32,7 @@ human approvals.
 | Solution design | [`plan-agent`](../.github/workflows/plan-agent.md), following the [`architect`](../.github/agents/architect.agent.md) profile | Human reviewer accepts or rejects the design and any Proposed ADR before implementation. |
 | Implementation verification | [`test-engineer`](../.github/agents/test-engineer.agent.md) | Human author/reviewer verifies test intent and CI results. |
 | Pull request review | [`reviewer`](../.github/agents/reviewer.agent.md) | Human reviewer decides findings and provides required approval; agents never approve or merge. |
-| Security review | [`security-reviewer`](../.github/agents/security-reviewer.agent.md) | Maintainer reviews findings and approves any security-sensitive remediation. |
+| Security review | [`security-review`](../.github/workflows/security-review.md), using the [`security-reviewer`](../.github/agents/security-reviewer.agent.md) profile | The advisory review covers only configured PR paths and the reviewed revision; maintainers assess findings and approve any security-sensitive remediation. No finding is not assurance; agents never approve or merge. |
 | Release preparation | [`release-manager`](../.github/agents/release-manager.agent.md) | Human verifies drafts and separately authorizes any publication. |
 | Incident response | [`ops-investigator`](../.github/agents/ops-investigator.agent.md) | Incident commander decides commands, rollback, and any production action. |
 
