@@ -30,7 +30,7 @@ jobs:
         # This credential is intentionally granted the built-in Reader role
         # only, not Cost Management Reader, so it cannot call Cost Management
         # billing APIs at all. See docs/agentic-sdlc.md > Cost governance.
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
