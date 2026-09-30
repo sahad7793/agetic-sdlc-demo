@@ -8,6 +8,7 @@ public class EfTaskRepository(TaskManagementDbContext database) : ITaskRepositor
 {
     public async Task<IReadOnlyList<TaskItem>> GetAllAsync(
         TaskItemStatus? status,
+        TaskPriority? priority,
         DateTime? dueBefore,
         DateTime? dueAfter,
         CancellationToken cancellationToken)
@@ -16,6 +17,11 @@ public class EfTaskRepository(TaskManagementDbContext database) : ITaskRepositor
         if (status is not null)
         {
             query = query.Where(task => task.Status == status);
+        }
+
+        if (priority is not null)
+        {
+            query = query.Where(task => task.Priority == priority);
         }
 
         if (dueBefore is not null)

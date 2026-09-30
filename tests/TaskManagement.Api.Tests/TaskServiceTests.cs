@@ -309,10 +309,30 @@ public class TaskServiceTests
 
         var result = await service.GetAllAsync(
             TaskItemStatus.InProgress,
+            null,
             dueBefore,
             dueAfter,
             CancellationToken.None);
 
+        result.Should().ContainSingle(task => task.Id == matchingTask.Id);
+    }
+
+    [Fact]
+    public async Task GetAllAsync_ForwardsPriorityFilterToRepository()
+    {
+        var matchingTask = new TaskItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "High priority",
+            Priority = TaskPriority.High,
+            CreatedAt = DateTime.UtcNow
+        };
+        var repository = new FakeTaskRepository { Tasks = [matchingTask] };
+        var service = new TaskService(repository, NullLogger<TaskService>.Instance);
+
+        var result = await service.GetAllAsync(null, TaskPriority.High, null, null, CancellationToken.None);
+
+        repository.RequestedPriority.Should().Be(TaskPriority.High);
         result.Should().ContainSingle(task => task.Id == matchingTask.Id);
     }
 
@@ -324,13 +344,16 @@ public class TaskServiceTests
         public TaskItem? Task { get; set; }
         public List<TaskItem> Tasks { get; set; } = [];
         public int UpdateCalls { get; private set; }
+        public TaskPriority? RequestedPriority { get; private set; }
 
         public Task<IReadOnlyList<TaskItem>> GetAllAsync(
             TaskItemStatus? status,
+            TaskPriority? priority,
             DateTime? dueBefore,
             DateTime? dueAfter,
             CancellationToken cancellationToken)
         {
+            RequestedPriority = priority;
             IEnumerable<TaskItem> tasks = Tasks;
             if (Task is not null)
             {
@@ -340,6 +363,7 @@ public class TaskServiceTests
             return System.Threading.Tasks.Task.FromResult<IReadOnlyList<TaskItem>>(
                 tasks
                     .Where(task => status is null || task.Status == status)
+                    .Where(task => priority is null || task.Priority == priority)
                     .Where(task => dueBefore is null ||
                         (task.DueDate.HasValue && task.DueDate.Value < dueBefore.Value))
                     .Where(task => dueAfter is null ||
