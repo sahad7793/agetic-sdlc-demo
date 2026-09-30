@@ -79,6 +79,7 @@ for scope and limitations.
 
 ## Architecture
 
+- Read the [manager-friendly project overview](docs/project-overview.md) for a plain-language explanation of the application and the Agentic SDLC demonstration.
 - **Controllers** expose HTTP endpoints and map service results to HTTP responses.
 - **Services** enforce business rules, including non-past due dates and the `Todo -> InProgress -> Done` status sequence.
 - **Repositories** isolate EF Core data access. The app uses SQLite locally; integration tests replace it with EF Core InMemory.
